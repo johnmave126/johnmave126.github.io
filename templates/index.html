@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="section">
+  <div class="container">
+    <div class="has-text-centered">
+      <h1 class="title is-2">{{ section.title }}</h1>
+      <p class="subtitle is-4">{{ section.description }}</p>
+      {% if config.extra.avatar.file %}
+      <figure class="image is-flex is-justify-content-center is-align-items-center">
+        <img class="is-rounded" src="{{ config.extra.avatar.file }}" style="max-width: 192px" />
+      </figure>
+      {% if config.extra.avatar.author %}
+      <span class="is-size-7">Avatar courtesy of
+      <strong>
+      {% if config.extra.avatar.link %}
+      <a rel="noopener nofollow noreferrer" href="{{ config.extra.avatar.link }}" target="_blank">{{ config.extra.avatar.author | safe }}</a>
+      {% else %}
+      {{ config.extra.avatar.author | safe }}
+      {% endif %}
+      </strong>
+      </span>
+      {% endif %}
+      {% endif %}
+      {{ macros:: social_links( social_config=config.extra.social) }}
+    </div>
+    <div class="columns is-centered">
+      <div class="column is-half">
+        <div class="content has-text-centered">
+          {{ section.content | safe }}
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+{% endblock %}

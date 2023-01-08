@@ -1,0 +1,64 @@
+title = "Youmu"
+
+base_url = "/"
+theme = "DeepThought"
+
+compile_sass = true
+build_search_index = true
+generate_feed = true
+feed_limit = 20
+minify_html = true
+
+taxonomies = [
+    { name = "categories", feed = true, paginate_by = 10 },
+    { name = "tags", fees = true, paginate_by = 10 },
+]
+
+[markdown]
+highlight_code = true
+highlight_theme = "monokai"
+render_emoji = true
+external_links_target_blank = true
+external_links_no_follow = true
+external_links_no_referrer = true
+
+[extra]
+navbar_items = [
+ { code = "en", nav_items = [
+  { url = "$BASE_URL/", name = "Home" },
+  { url = "$BASE_URL/posts", name = "Posts" },
+  { url = "$BASE_URL/tags", name = "Tags" },
+  { url = "$BASE_URL/categories", name = "Categories" },
+ ]}
+]
+katex.enabled = true
+katex.auto_render = true
+
+[extra.author]
+name = "妖夢ちゃん"
+
+[extra.avatar]
+file = "/images/avatar.png"
+author = "大汽"
+link = "https://www.pixiv.net/artworks/32067006"
+
+[extra.social]
+github = "johnmave126"
+
+[extra.favicon]
+favicon_16x16 = "/icons/favicon-16x16.png"
+favicon_32x32 = "/icons/favicon-32x32.png"
+apple_touch_icon = "/icons/apple-touch-icon.png"
+safari_pinned_tab = "/icons/safari-pinned-tab.svg"
+webmanifest = "/icons/site.webmanifest"
+
+[slugify]
+paths = "on"
+taxonomies = "on"
+anchors = "on"
+
+[search]
+include_title = true
+include_description = false
+include_path = false
+include_content = true
