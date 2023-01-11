@@ -156,6 +156,6 @@ It is quite tedious to manually specify what overlay numbers have the same figur
 
 I haven't figured out the expanding part yet. But here are some thoughts on the second part:
 - One simple idea is to append the hash to the end of the filename. Downside is that the figure could be frequently edited, and old files quickly bloat the build directory.
-- Another more practical idea is to store a mapping between hash and filename in memory. This seems  much more complicated to implement and though.
+- Another more practical idea is to store a mapping between hash and filename in memory. This seems  much more complicated to implement though.
 
 Of course the elephant in the room is that the compilation is single-threaded, where the TikZ compilation chould've been done in parallel. There are some techniques involving using a custom build system for figures but that does not play too well on Overleaf.
