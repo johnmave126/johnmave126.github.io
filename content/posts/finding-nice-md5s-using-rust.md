@@ -100,7 +100,7 @@ I came up with two approaches to achieve this:
       // Assemble `__m256i`
       let x = _mm256_set_m128i(hi_128, lo_128);
       // Apply mask to clear hi-nibble of each byte
-      _mm256_and_si256(x, _mm256_set1_epi8(0xF0u8 as i8))
+      _mm256_and_si256(x, _mm256_set1_epi8(0x0Fu8 as i8))
   }
   ```
 Quick benchmark showed that the two approaches had very similar performance, so I went with the first one.
