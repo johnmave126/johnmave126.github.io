@@ -1,0 +1,892 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xml:lang="en">
+	<title>Youmu</title>
+	<link href="/atom.xml" rel="self" type="application/atom+xml"/>
+  <link href="/"/>
+	<generator uri="https://www.getzola.org/">Zola</generator>
+	<updated>2022-01-12T00:00:00+00:00</updated>
+	<id>/atom.xml</id>
+	<entry xml:lang="en">
+		<title>Finding Nice MD5s Using Rust</title>
+		<published>2022-01-12T00:00:00+00:00</published>
+		<updated>2022-01-12T00:00:00+00:00</updated>
+		<link rel="alternate" href="/posts/finding-nice-md5s-using-rust/" type="text/html"/>
+		<id>/posts/finding-nice-md5s-using-rust/</id>
+		<content type="html">&lt;p&gt;At the start of the week, a friend of mine sent me a &lt;a rel=&quot;noopener nofollow noreferrer&quot; target=&quot;_blank&quot; href=&quot;https:&#x2F;&#x2F;crypto.stackexchange.com&#x2F;questions&#x2F;68674&#x2F;md5-existence-of-invariant-fixed-point&quot;&gt;link&lt;&#x2F;a&gt;. &amp;quot;What an interesting yet pointless question!&amp;quot;, both of us agreed. Later that day, &lt;a rel=&quot;noopener nofollow noreferrer&quot; target=&quot;_blank&quot; href=&quot;https:&#x2F;&#x2F;github.com&#x2F;zvibazak&#x2F;Nice-MD5s&quot;&gt;another link&lt;&#x2F;a&gt; was also sent to me. Apparently there was someone who did care a little bit. Out of curiosity, I opened the &lt;code&gt;find_md5.py&lt;&#x2F;code&gt; file, and it hit me: &amp;quot;How can I optimize this task?&amp;quot; The task did shout SIMD to me, and I knew rust has &lt;a rel=&quot;noopener nofollow noreferrer&quot; target=&quot;_blank&quot; href=&quot;https:&#x2F;&#x2F;doc.rust-lang.org&#x2F;core&#x2F;arch&#x2F;index.html&quot;&gt;&lt;code&gt;core::arch&lt;&#x2F;code&gt;&lt;&#x2F;a&gt; which provides many SIMD intrinsics. Hence my journey to try out Rust&#x27;s SIMD and inline assembly began.&lt;&#x2F;p&gt;
+&lt;span id=&quot;continue-reading&quot;&gt;&lt;&#x2F;span&gt;&lt;h1 id=&quot;introduction&quot;&gt;Introduction&lt;&#x2F;h1&gt;
+&lt;p&gt;By looking at &lt;a rel=&quot;noopener nofollow noreferrer&quot; target=&quot;_blank&quot; href=&quot;https:&#x2F;&#x2F;github.com&#x2F;zvibazak&#x2F;Nice-MD5s#definitions&quot;&gt;zvibazak&#x2F;Nice-MD5s&lt;&#x2F;a&gt;, I got a closer picture of the task on hand. More formally we want to deal with 3 tasks:&lt;&#x2F;p&gt;
+&lt;ol&gt;
+&lt;li&gt;Randomly generate a string with 32 characters, each from &lt;code&gt;[0-9a-z]&lt;&#x2F;code&gt;. There are some caveats on the so-called &amp;quot;Gold MD5&amp;quot;, also known as the fixed point, but we will ignore that for now.&lt;&#x2F;li&gt;
+&lt;li&gt;Compute the MD5 hash of the generate string.&lt;&#x2F;li&gt;
+&lt;li&gt;Compute different metrics of the hash to determine how nice it is:
+&lt;ol&gt;
+&lt;li&gt;The length of the longest consecutive digits as prefix&lt;&#x2F;li&gt;
+&lt;li&gt;The length of the longest consecutive letters as prefix&lt;&#x2F;li&gt;
+&lt;li&gt;The length of the longest consecutive homogeneous character as prefix&lt;&#x2F;li&gt;
+&lt;li&gt;The length of the longest prefix matching $\pi$&lt;&#x2F;li&gt;
+&lt;li&gt;The length of the longest prefix matching $e$&lt;&#x2F;li&gt;
+&lt;&#x2F;ol&gt;
+&lt;&#x2F;li&gt;
+&lt;&#x2F;ol&gt;
+&lt;p&gt;Following the chronological order of me writing the code, I will first talk about how to accomplish task 3, which I call &amp;quot;computing niceties&amp;quot;. For the sake of brevity, I will assume we only care about the longest consecutive digits, and only gloss over other &amp;quot;niceties&amp;quot;. I will then talk about generating strings, and finally the MD5 hash computation.&lt;&#x2F;p&gt;
+&lt;p&gt;The complete codebase could be found at &lt;a rel=&quot;noopener nofollow noreferrer&quot; target=&quot;_blank&quot; href=&quot;https:&#x2F;&#x2F;github.com&#x2F;johnmave126&#x2F;nice-md5s&quot;&gt;johnmave126&#x2F;nice-md5s&lt;&#x2F;a&gt;. And for SIMD and inline assembly, we only consider &lt;code&gt;x86&lt;&#x2F;code&gt; and &lt;code&gt;x86_64&lt;&#x2F;code&gt; architecture.&lt;&#x2F;p&gt;
+&lt;h1 id=&quot;computing-niceties&quot;&gt;Computing &amp;quot;Niceties&amp;quot;&lt;&#x2F;h1&gt;
+&lt;p&gt;We are looking for a function like follows:&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;fn &lt;&#x2F;span&gt;&lt;span style=&quot;color:#a6e22e;&quot;&gt;count_leading_digits&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;x&lt;&#x2F;span&gt;&lt;span&gt;: [&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u8&lt;&#x2F;span&gt;&lt;span&gt;; 16]) -&amp;gt; &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u8&lt;&#x2F;span&gt;&lt;span&gt;;
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;The input is a 16-byte array (MD5 produces 128 bits, aka 16 bytes), and the output is a number counting the number of digits from the beginning. To make sense of &amp;quot;a digit&amp;quot;, we break a byte into 2 nibbles, and we call a nibble &lt;code&gt;n&lt;&#x2F;code&gt; &amp;quot;digit&amp;quot; if &lt;code&gt;0x0 &amp;lt;= n &amp;lt; 0xa&lt;&#x2F;code&gt;, and &amp;quot;letter&amp;quot; otherwise. Within each byte, we consider the most significant nibble comes before the least significant nibble.&lt;&#x2F;p&gt;
+&lt;h2 id=&quot;baseline&quot;&gt;Baseline&lt;&#x2F;h2&gt;
+&lt;p&gt;It is quite tempting to have a baseline algorithm as follows:&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;fn &lt;&#x2F;span&gt;&lt;span style=&quot;color:#a6e22e;&quot;&gt;count_leading_digits&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;x&lt;&#x2F;span&gt;&lt;span&gt;: [&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u8&lt;&#x2F;span&gt;&lt;span&gt;; 16]) -&amp;gt; &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u8 &lt;&#x2F;span&gt;&lt;span&gt;{
+&lt;&#x2F;span&gt;&lt;span&gt;    x.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;into_iter&lt;&#x2F;span&gt;&lt;span&gt;()
+&lt;&#x2F;span&gt;&lt;span&gt;        .&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;map&lt;&#x2F;span&gt;&lt;span&gt;(|&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;b&lt;&#x2F;span&gt;&lt;span&gt;| [b &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;&amp;gt;&amp;gt; &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;4&lt;&#x2F;span&gt;&lt;span&gt;, b &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;&amp;amp; &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0x0F&lt;&#x2F;span&gt;&lt;span&gt;])
+&lt;&#x2F;span&gt;&lt;span&gt;        .&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;flatten&lt;&#x2F;span&gt;&lt;span&gt;()
+&lt;&#x2F;span&gt;&lt;span&gt;        .&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;take_while&lt;&#x2F;span&gt;&lt;span&gt;(|&lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;&amp;amp;&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;n&lt;&#x2F;span&gt;&lt;span&gt;| n &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;&amp;lt; &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0xA&lt;&#x2F;span&gt;&lt;span&gt;)
+&lt;&#x2F;span&gt;&lt;span&gt;        .&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;count&lt;&#x2F;span&gt;&lt;span&gt;() &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;as &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u8
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;where we construct an iterator over the nibbles from the byte array and count. It turns out that, especially in the case where we want to compute multiple metrics, it is more performant to convert the byte array to a nibble array first.&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;struct &lt;&#x2F;span&gt;&lt;span&gt;Nibbles([&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u8&lt;&#x2F;span&gt;&lt;span&gt;; 32]);
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;impl From&lt;&#x2F;span&gt;&lt;span&gt;&amp;lt;[&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u8&lt;&#x2F;span&gt;&lt;span&gt;; &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;16&lt;&#x2F;span&gt;&lt;span&gt;]&amp;gt; &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;for &lt;&#x2F;span&gt;&lt;span&gt;Nibbles {
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;fn &lt;&#x2F;span&gt;&lt;span style=&quot;color:#a6e22e;&quot;&gt;from&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;x&lt;&#x2F;span&gt;&lt;span&gt;: [&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u8&lt;&#x2F;span&gt;&lt;span&gt;; 16]) -&amp;gt; &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;Self &lt;&#x2F;span&gt;&lt;span&gt;{
+&lt;&#x2F;span&gt;&lt;span&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; nibbles &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;=&lt;&#x2F;span&gt;&lt;span&gt; x.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;map&lt;&#x2F;span&gt;&lt;span&gt;(|&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;b&lt;&#x2F;span&gt;&lt;span&gt;| [b &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;&amp;gt;&amp;gt; &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;4&lt;&#x2F;span&gt;&lt;span&gt;, b &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;&amp;amp; &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0x0F&lt;&#x2F;span&gt;&lt;span&gt;]);
+&lt;&#x2F;span&gt;&lt;span&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; SAFETY: size_of::&amp;lt;[[u8; 2]; 16]&amp;gt;() == size_of::&amp;lt;[u8; 32]&amp;gt;()
+&lt;&#x2F;span&gt;&lt;span&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;Self&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;unsafe &lt;&#x2F;span&gt;&lt;span&gt;{ &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;transmute&lt;&#x2F;span&gt;&lt;span&gt;(nibbles) })
+&lt;&#x2F;span&gt;&lt;span&gt;    }
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;fn &lt;&#x2F;span&gt;&lt;span style=&quot;color:#a6e22e;&quot;&gt;count_leading_digits&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;x&lt;&#x2F;span&gt;&lt;span&gt;: [&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u8&lt;&#x2F;span&gt;&lt;span&gt;; 16]) -&amp;gt; &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u8 &lt;&#x2F;span&gt;&lt;span&gt;{
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; Here we convert `x` to `Nibbles`, while in practice we would convert
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; beforehand and reuse `Nibbles` to compute multiple metrics
+&lt;&#x2F;span&gt;&lt;span&gt;    Nibbles::from(x).&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;iter&lt;&#x2F;span&gt;&lt;span&gt;().&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;take_while&lt;&#x2F;span&gt;&lt;span&gt;(|&lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;&amp;amp;&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;n&lt;&#x2F;span&gt;&lt;span&gt;| n &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;&amp;lt; &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0xA&lt;&#x2F;span&gt;&lt;span&gt;).&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;count&lt;&#x2F;span&gt;&lt;span&gt;() &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;as &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u8
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;h2 id=&quot;simd&quot;&gt;SIMD&lt;&#x2F;h2&gt;
+&lt;p&gt;The first step is to load &lt;code&gt;[u8; 16]&lt;&#x2F;code&gt; into an SIMD register. We also want it to be in nibbles form for easier later processing. Conveniently &lt;code&gt;[u8; 32]&lt;&#x2F;code&gt; fits perfectly into a 256-bit SIMD vector, aka an &lt;code&gt;__m256i&lt;&#x2F;code&gt;.&lt;&#x2F;p&gt;
+&lt;p&gt;I came up with two approaches to achieve this:&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;Load &lt;code&gt;[u8; 16]&lt;&#x2F;code&gt; into an &lt;code&gt;__m128i&lt;&#x2F;code&gt;, convert each byte to a &lt;code&gt;u16&lt;&#x2F;code&gt; with zero extending to get an &lt;code&gt;__m256i&lt;&#x2F;code&gt;, and finally using bit shifting to adjust positions of the nibbles.&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;unsafe &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;fn &lt;&#x2F;span&gt;&lt;span style=&quot;color:#a6e22e;&quot;&gt;load&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;x&lt;&#x2F;span&gt;&lt;span&gt;: [&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u8&lt;&#x2F;span&gt;&lt;span&gt;; 16]) -&amp;gt; __m256i {
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; x &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm_loadu_si128&lt;&#x2F;span&gt;&lt;span&gt;(x.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;as_ptr&lt;&#x2F;span&gt;&lt;span&gt;().&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;cast&lt;&#x2F;span&gt;&lt;span&gt;());
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; Each byte now occupies 2 bytes
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; x &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_cvtepu8_epi16&lt;&#x2F;span&gt;&lt;span&gt;(x);
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; Shift left to place lo-nibble in hi-byte and clear excess nibbles
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; lo_nibble &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_and_si256&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_slli_epi16&lt;&#x2F;span&gt;&lt;span&gt;(x, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;8&lt;&#x2F;span&gt;&lt;span&gt;), &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_set1_epi8&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0x0F&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u8 &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;as &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;i8&lt;&#x2F;span&gt;&lt;span&gt;));
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; Shift right to place hi-nibble in lo-byte
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; hi_nibble &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_srli_epi16&lt;&#x2F;span&gt;&lt;span&gt;(x, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;4&lt;&#x2F;span&gt;&lt;span&gt;);
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_or_si256&lt;&#x2F;span&gt;&lt;span&gt;(hi_nibble, lo_nibble)
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;&#x2F;li&gt;
+&lt;li&gt;Load &lt;code&gt;[u8; 16]&lt;&#x2F;code&gt; into an &lt;code&gt;__m128i&lt;&#x2F;code&gt;, use bit shifting to move hi-nibbles, interleave the bytes and then assemble the &lt;code&gt;__m256i&lt;&#x2F;code&gt;.&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;unsafe &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;fn &lt;&#x2F;span&gt;&lt;span style=&quot;color:#a6e22e;&quot;&gt;load&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;x&lt;&#x2F;span&gt;&lt;span&gt;: [&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u8&lt;&#x2F;span&gt;&lt;span&gt;; 16]) -&amp;gt; __m256i {
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; x &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm_loadu_si128&lt;&#x2F;span&gt;&lt;span&gt;(x.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;as_ptr&lt;&#x2F;span&gt;&lt;span&gt;().&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;cast&lt;&#x2F;span&gt;&lt;span&gt;());
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; Shift hi nibbles of each byte into lo nibbles
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; Hi-nibbles of each byte will contain some garbage now
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; Note: there is no `_mm_srli_epi8`
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; hi_nibble &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm_srli_si128&lt;&#x2F;span&gt;&lt;span&gt;(x, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;4&lt;&#x2F;span&gt;&lt;span&gt;);
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; Interleave
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; Hi-nibbles of each byte will contain some garbage
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; lo_128 &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm_unpacklo_epi8&lt;&#x2F;span&gt;&lt;span&gt;(hi_nibble, x);
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; hi_128 &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm_unpackhi_epi8&lt;&#x2F;span&gt;&lt;span&gt;(hi_nibble, x);
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; Assemble `__m256i`
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; x &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_set_m128i&lt;&#x2F;span&gt;&lt;span&gt;(hi_128, lo_128);
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; Apply mask to clear hi-nibble of each byte
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_and_si256&lt;&#x2F;span&gt;&lt;span&gt;(x, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_set1_epi8&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0x0F&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u8 &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;as &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;i8&lt;&#x2F;span&gt;&lt;span&gt;))
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;p&gt;Quick benchmark showed that the two approaches had very similar performance, so I went with the first one.&lt;&#x2F;p&gt;
+&lt;p&gt;Next, we want to determine whether each nibble is a digit or a letter. This is quite straightforward.&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; x &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;load&lt;&#x2F;span&gt;&lt;span&gt;(x);
+&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; mask &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_cmpgt_epi8&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_set1_epi8&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0x0A&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u8 &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;as &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;i8&lt;&#x2F;span&gt;&lt;span&gt;), x);
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;For each byte in &lt;code&gt;mask&lt;&#x2F;code&gt;, the byte is &lt;code&gt;0xFF&lt;&#x2F;code&gt; if the corresponding byte in &lt;code&gt;x&lt;&#x2F;code&gt; is smaller than &lt;code&gt;0x0A&lt;&#x2F;code&gt;, and &lt;code&gt;0x00&lt;&#x2F;code&gt; otherwise. In other words, if the nibble is a digit, the byte becomes &lt;code&gt;0xFF&lt;&#x2F;code&gt;. Otherwise, the nibble is a letter, and the byte becomes &lt;code&gt;0x00&lt;&#x2F;code&gt;.&lt;&#x2F;p&gt;
+&lt;p&gt;For other metrics, this kind of mask is also easy to compute.&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;For longest prefix matching $\pi$&#x2F;$e$, we can use &lt;code&gt;_mm256_cmpeq_epi8&lt;&#x2F;code&gt;:&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; x &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;load&lt;&#x2F;span&gt;&lt;span&gt;(x);
+&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;const &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;PI&lt;&#x2F;span&gt;&lt;span&gt;: [&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u8&lt;&#x2F;span&gt;&lt;span&gt;; &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;32&lt;&#x2F;span&gt;&lt;span&gt;] &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span&gt;[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;3&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;1&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;4&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;1&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;5&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;9&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;* the rest omitted *&#x2F;&lt;&#x2F;span&gt;&lt;span&gt;];
+&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; mask &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_cmpeq_epi8&lt;&#x2F;span&gt;&lt;span&gt;(x, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_loadu_si256&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;PI&lt;&#x2F;span&gt;&lt;span&gt;.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;as_ptr&lt;&#x2F;span&gt;&lt;span&gt;().&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;cast&lt;&#x2F;span&gt;&lt;span&gt;()));
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;&#x2F;li&gt;
+&lt;li&gt;For homogeneous prefix, we can make an vector where each byte is the least significant byte of the original vector:&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; x &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;load&lt;&#x2F;span&gt;&lt;span&gt;(x);
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; Duplicate the least significant 64-bit to all 64-bit lanes.
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; The main motivation is to copy the least significant byte to 64-th position.
+&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; b &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_permute4x64_epi64&lt;&#x2F;span&gt;&lt;span&gt;(x, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0&lt;&#x2F;span&gt;&lt;span&gt;);
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; Within 128-bit (16-byte) lane, set all byte to be the least significant one.
+&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; b &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_shuffle_epi8&lt;&#x2F;span&gt;&lt;span&gt;(b, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_setzero_si256&lt;&#x2F;span&gt;&lt;span&gt;());
+&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; mask &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_cmpeq_epi8&lt;&#x2F;span&gt;&lt;span&gt;(x, b);
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;p&gt;Now that we have the mask, it is a classical technique to use &lt;code&gt;movemask&lt;&#x2F;code&gt; to collect the mask:&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; packed_mask &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_movemask_epi8&lt;&#x2F;span&gt;&lt;span&gt;(mask) &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;as &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u32&lt;&#x2F;span&gt;&lt;span&gt;;
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;The $i$-th bit of &lt;code&gt;packed_mask&lt;&#x2F;code&gt; is 1 if and only if the $i$-th byte of &lt;code&gt;mask&lt;&#x2F;code&gt; is &lt;code&gt;0xFF&lt;&#x2F;code&gt;. So our answer is the number of consecutive 1&#x27;s in &lt;code&gt;packed_mask&lt;&#x2F;code&gt;. Conveniently, there is a intrinsic to count the number of consecutive &lt;strong&gt;0&#x27;s&lt;&#x2F;strong&gt; in a number:&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; Need to invert the bits first
+&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; answer &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_tzcnt_u32&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;!&lt;&#x2F;span&gt;&lt;span&gt;packed_mask) &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;as &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u8&lt;&#x2F;span&gt;&lt;span&gt;;
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;And we arrive at a SIMD solution, which requires AVX, AVX2, SSE2, and BMI1 extension on a x86&#x2F;x86_64 processor.&lt;&#x2F;p&gt;
+&lt;h2 id=&quot;a-failed-simd-approach&quot;&gt;A Failed SIMD Approach&lt;&#x2F;h2&gt;
+&lt;p&gt;At this point I had another idea: nice MD5s should not be common. Maybe I could use SIMD to quickly rule out MD5s that are not very nice, and only run the SIMD algorithm on potentially nice one.&lt;&#x2F;p&gt;
+&lt;p&gt;If we take look at 2 bytes, which are 4 nibbles, we have:&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;The probability that they are all digits is $(10&#x2F;16)^4\approx 15.3\%$.&lt;&#x2F;li&gt;
+&lt;li&gt;The probability that they are all letters is $(6&#x2F;16)^4\approx 1.98\%$.&lt;&#x2F;li&gt;
+&lt;li&gt;The probability that they are all the same is $(1&#x2F;16)^3\approx 0.024\%$.&lt;&#x2F;li&gt;
+&lt;li&gt;The probability that they match $\pi$&#x2F;$e$ is $(1&#x2F;16)^4\approx 0.0015\%$.&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;p&gt;So, my idea was: apart from the initial screening, no additional runtime would be incurred with high probability.&lt;&#x2F;p&gt;
+&lt;p&gt;Consider 4 nibbles occupying 4 bytes, we can fit 8 instances in an &lt;code&gt;__m256i&lt;&#x2F;code&gt; and process them simultaneously.&lt;&#x2F;p&gt;
+&lt;p&gt;To load the first 4 nibbles of each of &lt;code&gt;[[u8; 16]; 8]&lt;&#x2F;code&gt;, we can simply generate an array containing the first 2 bytes of each array, and use the load method above.&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; x is `[[u8; 16]; 8]`
+&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; first_2_bytes &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;=&lt;&#x2F;span&gt;&lt;span&gt; x.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;map&lt;&#x2F;span&gt;&lt;span&gt;(|&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;v&lt;&#x2F;span&gt;&lt;span&gt;| [v[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0&lt;&#x2F;span&gt;&lt;span&gt;], v[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;1&lt;&#x2F;span&gt;&lt;span&gt;]]);
+&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; first_2_bytes &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;load&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;unsafe &lt;&#x2F;span&gt;&lt;span&gt;{ &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;transmute&lt;&#x2F;span&gt;&lt;span&gt;(first_2_bytes) });
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;We are filtering hashes that are not very nice, so I deem that the first 4 nibbles of a hash have to be all nice before we further investigate it. We can apply a similar strategy as above, but with 32-bit lanes.&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; byte_mask &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_cmpgt_epi8&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_set1_epi8&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0x0A&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u8 &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;as &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;i8&lt;&#x2F;span&gt;&lt;span&gt;), first_2_bytes);
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; If any of the bits in a 32-bit lane is not 1, set all 32 bits to 0
+&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; mask &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_cmpeq_epi8&lt;&#x2F;span&gt;&lt;span&gt;(first_2_bytes, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_set1_epi8&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0xFF&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u8 &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;as &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;i8&lt;&#x2F;span&gt;&lt;span&gt;));
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; movemask for each 32-bit lane, 8 lanes total
+&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; packed_mask &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_movemask_ps&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_cvtepi32_ps&lt;&#x2F;span&gt;&lt;span&gt;(mask)) &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;as &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u8&lt;&#x2F;span&gt;&lt;span&gt;;
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;There are only $2^8=256$ different &lt;code&gt;packed_mask&lt;&#x2F;code&gt;, so we build a look up table such that each &lt;code&gt;packed_mask&lt;&#x2F;code&gt; is mapped to a &lt;code&gt;u32&lt;&#x2F;code&gt; where indices of 1&#x27;s in &lt;code&gt;packed_mask&lt;&#x2F;code&gt; are packed together. For example, if &lt;code&gt;packed_mask=0b0110_1110&lt;&#x2F;code&gt;, where bit-index &lt;code&gt;1, 2, 3, 5, 6&lt;&#x2F;code&gt; are 1&#x27;s, we map to a &lt;code&gt;u32&lt;&#x2F;code&gt; of &lt;code&gt;0x00076432&lt;&#x2F;code&gt;. Observe that we use 1-indexing in &lt;code&gt;u32&lt;&#x2F;code&gt;, so that we can easily detect whether there are more by a zero-test.&lt;&#x2F;p&gt;
+&lt;p&gt;Given the packed indices, we can initialize the answers to 0, and only compute hashes that has potential.&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; `indices` stores the packed indices
+&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; answers &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span&gt;[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0&lt;&#x2F;span&gt;&lt;span&gt;; &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;8&lt;&#x2F;span&gt;&lt;span&gt;];
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;while&lt;&#x2F;span&gt;&lt;span&gt; indices &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;!= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0 &lt;&#x2F;span&gt;&lt;span&gt;{
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; idx &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span&gt;(indices &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;&amp;amp; &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0xF&lt;&#x2F;span&gt;&lt;span&gt;) &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;as &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;usize &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;- &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;1&lt;&#x2F;span&gt;&lt;span&gt;;
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; Use SIMD algorithm to compute the actual number
+&lt;&#x2F;span&gt;&lt;span&gt;    answers[idx] &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;count_leading_digits_simd&lt;&#x2F;span&gt;&lt;span&gt;(x[idx]);
+&lt;&#x2F;span&gt;&lt;span&gt;    indices &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;&amp;gt;&amp;gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;4&lt;&#x2F;span&gt;&lt;span&gt;;
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;The algorithm will report 0 if the number is less than 4, as opposed to the accurate number from the algorithms above.&lt;&#x2F;p&gt;
+&lt;p&gt;When computing multiple metrics, to avoid loading an array multiple times, a small optimization would be to &lt;code&gt;OR&lt;&#x2F;code&gt; all the masks together and only generate &lt;code&gt;__m256i&lt;&#x2F;code&gt; for the corresponding arrays.&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; We have multiple masks from different metrics
+&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; mask &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;=&lt;&#x2F;span&gt;&lt;span&gt; mask_1 &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;|&lt;&#x2F;span&gt;&lt;span&gt; mask_2 &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;|&lt;&#x2F;span&gt;&lt;span&gt; mask_3;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; SAFETY: MaybeUninit is always initialized
+&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;mut&lt;&#x2F;span&gt;&lt;span&gt; simds: [MaybeUninit&amp;lt;__m256i&amp;gt;; &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;8&lt;&#x2F;span&gt;&lt;span&gt;] &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= unsafe &lt;&#x2F;span&gt;&lt;span&gt;{ MaybeUninit::uninit().&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;assume_init&lt;&#x2F;span&gt;&lt;span&gt;() };
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;while&lt;&#x2F;span&gt;&lt;span&gt; indices &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;!= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0 &lt;&#x2F;span&gt;&lt;span&gt;{
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; idx &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span&gt;(indices &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;&amp;amp; &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0xF&lt;&#x2F;span&gt;&lt;span&gt;) &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;as &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;usize &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;- &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;1&lt;&#x2F;span&gt;&lt;span&gt;;
+&lt;&#x2F;span&gt;&lt;span&gt;    simds[idx].&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;write&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;load&lt;&#x2F;span&gt;&lt;span&gt;(x[idx]));
+&lt;&#x2F;span&gt;&lt;span&gt;    indices &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;&amp;gt;&amp;gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;4&lt;&#x2F;span&gt;&lt;span&gt;;
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;It turns out that, although the performance of this approach is better than baseline, it is still much slower than the previous SIMD algorithm. So, I call this a failed attempt.&lt;&#x2F;p&gt;
+&lt;h2 id=&quot;performance-comparison&quot;&gt;Performance Comparison&lt;&#x2F;h2&gt;
+&lt;h3 id=&quot;benchmark-system&quot;&gt;Benchmark System&lt;&#x2F;h3&gt;
+&lt;table&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;Component&lt;&#x2F;th&gt;&lt;th&gt;Detail&lt;&#x2F;th&gt;&lt;&#x2F;tr&gt;&lt;&#x2F;thead&gt;&lt;tbody&gt;
+&lt;tr&gt;&lt;td&gt;CPU&lt;&#x2F;td&gt;&lt;td&gt;Intel Core i7-6700K&lt;&#x2F;td&gt;&lt;&#x2F;tr&gt;
+&lt;tr&gt;&lt;td&gt;RAM&lt;&#x2F;td&gt;&lt;td&gt;32GB DDR4 2400MHz&lt;&#x2F;td&gt;&lt;&#x2F;tr&gt;
+&lt;tr&gt;&lt;td&gt;OS&lt;&#x2F;td&gt;&lt;td&gt;5.15.0.56-ubuntu-22.04.1-lts&lt;&#x2F;td&gt;&lt;&#x2F;tr&gt;
+&lt;tr&gt;&lt;td&gt;Rust&lt;&#x2F;td&gt;&lt;td&gt;1.66.0&lt;&#x2F;td&gt;&lt;&#x2F;tr&gt;
+&lt;tr&gt;&lt;td&gt;RUSTFLAGS&lt;&#x2F;td&gt;&lt;td&gt;&lt;code&gt;-C target-cpu=native&lt;&#x2F;code&gt;&lt;&#x2F;td&gt;&lt;&#x2F;tr&gt;
+&lt;&#x2F;tbody&gt;&lt;&#x2F;table&gt;
+&lt;h3 id=&quot;best-case-throughput&quot;&gt;Best Case Throughput&lt;&#x2F;h3&gt;
+&lt;ul&gt;
+&lt;li&gt;
+&lt;p&gt;Computing all the metrics&lt;&#x2F;p&gt;
+&lt;table&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;Method&lt;&#x2F;th&gt;&lt;th&gt;Block Size&lt;sup class=&quot;footnote-reference&quot;&gt;&lt;a href=&quot;#block_size&quot;&gt;1&lt;&#x2F;a&gt;&lt;&#x2F;sup&gt;&lt;&#x2F;th&gt;&lt;th&gt;Throughput&lt;&#x2F;th&gt;&lt;&#x2F;tr&gt;&lt;&#x2F;thead&gt;&lt;tbody&gt;
+&lt;tr&gt;&lt;td&gt;Baseline&lt;&#x2F;td&gt;&lt;td&gt;16&lt;&#x2F;td&gt;&lt;td&gt;43.980 Melem&#x2F;s&lt;&#x2F;td&gt;&lt;&#x2F;tr&gt;
+&lt;tr&gt;&lt;td&gt;SIMD&lt;&#x2F;td&gt;&lt;td&gt;2&lt;&#x2F;td&gt;&lt;td&gt;&lt;strong&gt;280.26 Melem&#x2F;s&lt;&#x2F;strong&gt;&lt;&#x2F;td&gt;&lt;&#x2F;tr&gt;
+&lt;tr&gt;&lt;td&gt;Failed SIMD&lt;&#x2F;td&gt;&lt;td&gt;8&lt;&#x2F;td&gt;&lt;td&gt;147.88 Melem&#x2F;s&lt;&#x2F;td&gt;&lt;&#x2F;tr&gt;
+&lt;&#x2F;tbody&gt;&lt;&#x2F;table&gt;
+&lt;&#x2F;li&gt;
+&lt;li&gt;
+&lt;p&gt;Computing number of consecutive digits as prefix&lt;&#x2F;p&gt;
+&lt;table&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;Method&lt;&#x2F;th&gt;&lt;th&gt;Block Size&lt;sup class=&quot;footnote-reference&quot;&gt;&lt;a href=&quot;#block_size&quot;&gt;1&lt;&#x2F;a&gt;&lt;&#x2F;sup&gt;&lt;&#x2F;th&gt;&lt;th&gt;Throughput&lt;&#x2F;th&gt;&lt;&#x2F;tr&gt;&lt;&#x2F;thead&gt;&lt;tbody&gt;
+&lt;tr&gt;&lt;td&gt;Baseline&lt;&#x2F;td&gt;&lt;td&gt;1&lt;&#x2F;td&gt;&lt;td&gt;85.079 Melem&#x2F;s&lt;&#x2F;td&gt;&lt;&#x2F;tr&gt;
+&lt;tr&gt;&lt;td&gt;SIMD&lt;&#x2F;td&gt;&lt;td&gt;4&lt;&#x2F;td&gt;&lt;td&gt;&lt;strong&gt;860.68 Melem&#x2F;s&lt;&#x2F;strong&gt;&lt;&#x2F;td&gt;&lt;&#x2F;tr&gt;
+&lt;tr&gt;&lt;td&gt;Failed SIMD&lt;&#x2F;td&gt;&lt;td&gt;8&lt;&#x2F;td&gt;&lt;td&gt;181.60 Melem&#x2F;s&lt;&#x2F;td&gt;&lt;&#x2F;tr&gt;
+&lt;&#x2F;tbody&gt;&lt;&#x2F;table&gt;
+&lt;&#x2F;li&gt;
+&lt;li&gt;
+&lt;p&gt;Computing number nibbles equal to $\pi$ as prefix&lt;&#x2F;p&gt;
+&lt;table&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;Method&lt;&#x2F;th&gt;&lt;th&gt;Block Size&lt;sup class=&quot;footnote-reference&quot;&gt;&lt;a href=&quot;#block_size&quot;&gt;1&lt;&#x2F;a&gt;&lt;&#x2F;sup&gt;&lt;&#x2F;th&gt;&lt;th&gt;Throughput&lt;&#x2F;th&gt;&lt;&#x2F;tr&gt;&lt;&#x2F;thead&gt;&lt;tbody&gt;
+&lt;tr&gt;&lt;td&gt;Baseline&lt;&#x2F;td&gt;&lt;td&gt;1&lt;&#x2F;td&gt;&lt;td&gt;368.23 Melem&#x2F;s&lt;&#x2F;td&gt;&lt;&#x2F;tr&gt;
+&lt;tr&gt;&lt;td&gt;SIMD&lt;&#x2F;td&gt;&lt;td&gt;4&lt;&#x2F;td&gt;&lt;td&gt;&lt;strong&gt;780.78 Melem&#x2F;s&lt;&#x2F;strong&gt;&lt;&#x2F;td&gt;&lt;&#x2F;tr&gt;
+&lt;tr&gt;&lt;td&gt;Failed SIMD&lt;&#x2F;td&gt;&lt;td&gt;8&lt;&#x2F;td&gt;&lt;td&gt;517.12 Melem&#x2F;s&lt;&#x2F;td&gt;&lt;&#x2F;tr&gt;
+&lt;&#x2F;tbody&gt;&lt;&#x2F;table&gt;
+&lt;&#x2F;li&gt;
+&lt;li&gt;
+&lt;p&gt;... other metrics results omitted ...&lt;&#x2F;p&gt;
+&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;div class=&quot;footnote-definition&quot; id=&quot;block_size&quot;&gt;&lt;sup class=&quot;footnote-definition-label&quot;&gt;1&lt;&#x2F;sup&gt;
+&lt;p&gt;The number of inputs to process in a single invocation. For baseline and SIMD, it is simply a &lt;code&gt;for&lt;&#x2F;code&gt;-loop.&lt;&#x2F;p&gt;
+&lt;&#x2F;div&gt;
+&lt;h1 id=&quot;random-string-generation&quot;&gt;Random String Generation&lt;&#x2F;h1&gt;
+&lt;p&gt;It might be statistically the same to iterate the input space sequentially, but it is definitely less fun. So, I went with generating random inputs. Obviously we don&#x27;t need a cryptographic secure random string generation. My requirements are simple:&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;String has length 32 and each character is from &lt;code&gt;[0-9a-z]&lt;&#x2F;code&gt;.&lt;&#x2F;li&gt;
+&lt;li&gt;Each valid string has a non-zero probability to appear.&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;p&gt;Mainly the input space is so large that I don&#x27;t really care about the quality of the randomness. We will use &lt;a rel=&quot;noopener nofollow noreferrer&quot; target=&quot;_blank&quot; href=&quot;https:&#x2F;&#x2F;docs.rs&#x2F;rand&#x2F;0.8.5&#x2F;rand&#x2F;rngs&#x2F;struct.SmallRng.html&quot;&gt;&lt;code&gt;SmallRng&lt;&#x2F;code&gt;&lt;&#x2F;a&gt; from &lt;a rel=&quot;noopener nofollow noreferrer&quot; target=&quot;_blank&quot; href=&quot;https:&#x2F;&#x2F;crates.io&#x2F;crates&#x2F;rand&quot;&gt;&lt;code&gt;rand&lt;&#x2F;code&gt;&lt;&#x2F;a&gt; crate for the source of randomness.&lt;&#x2F;p&gt;
+&lt;h2 id=&quot;baseline-1&quot;&gt;Baseline&lt;&#x2F;h2&gt;
+&lt;p&gt;I simply compute a random byte modulo 36, and map that to &lt;code&gt;[0-9a-z]&lt;&#x2F;code&gt; to generate a random character:&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; `POOL` is a map from `0-35` to `[0-9a-z]`
+&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;const &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;POOL&lt;&#x2F;span&gt;&lt;span&gt;: [&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u8&lt;&#x2F;span&gt;&lt;span&gt;; &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;36&lt;&#x2F;span&gt;&lt;span&gt;] &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span&gt;[ &lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;* omitted *&#x2F; &lt;&#x2F;span&gt;&lt;span&gt;];
+&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; v: [&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u8&lt;&#x2F;span&gt;&lt;span&gt;; &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;32&lt;&#x2F;span&gt;&lt;span&gt;] &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= unsafe &lt;&#x2F;span&gt;&lt;span&gt;{
+&lt;&#x2F;span&gt;&lt;span&gt;   &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;transmute&lt;&#x2F;span&gt;&lt;span&gt;([
+&lt;&#x2F;span&gt;&lt;span&gt;       rng.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;next_u64&lt;&#x2F;span&gt;&lt;span&gt;(),
+&lt;&#x2F;span&gt;&lt;span&gt;       rng.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;next_u64&lt;&#x2F;span&gt;&lt;span&gt;(),
+&lt;&#x2F;span&gt;&lt;span&gt;       rng.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;next_u64&lt;&#x2F;span&gt;&lt;span&gt;(),
+&lt;&#x2F;span&gt;&lt;span&gt;       rng.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;next_u64&lt;&#x2F;span&gt;&lt;span&gt;(),
+&lt;&#x2F;span&gt;&lt;span&gt;   ])
+&lt;&#x2F;span&gt;&lt;span&gt;};
+&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; my_random_string &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;=&lt;&#x2F;span&gt;&lt;span&gt; v.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;map&lt;&#x2F;span&gt;&lt;span&gt;(|&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;b&lt;&#x2F;span&gt;&lt;span&gt;| &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;POOL&lt;&#x2F;span&gt;&lt;span&gt;[(b &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;% &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;36&lt;&#x2F;span&gt;&lt;span&gt;) &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;as &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;usize&lt;&#x2F;span&gt;&lt;span&gt;]);
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;h2 id=&quot;simd-1&quot;&gt;SIMD&lt;&#x2F;h2&gt;
+&lt;p&gt;&lt;code&gt;[u8; 32]&lt;&#x2F;code&gt; fits perfectly into a &lt;code&gt;__m256i&lt;&#x2F;code&gt;, so it is natural to try SIMD. Given a random byte, I really want to use &lt;code&gt;_mm256_rem_epu8&lt;&#x2F;code&gt; to have the same behavior as the baseline algorithm. Unfortunately, that is part of SVML and not a part of Rust intrinsics. Hence I resorts to the following:&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;Take 6 bits from a random byte (0-63).&lt;&#x2F;li&gt;
+&lt;li&gt;Subtract 36 if the byte is greater than or equal to 36.&lt;&#x2F;li&gt;
+&lt;li&gt;Adjust the byte to &lt;code&gt;[0-9a-z]&lt;&#x2F;code&gt;.&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;p&gt;This way we make sure that every character has non-zero probability to appear. And the randomness is not too skewed.&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; Load 128 random bits
+&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; v &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_loadu_si256&lt;&#x2F;span&gt;&lt;span&gt;(
+&lt;&#x2F;span&gt;&lt;span&gt;    [
+&lt;&#x2F;span&gt;&lt;span&gt;        rng.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;next_u64&lt;&#x2F;span&gt;&lt;span&gt;(),
+&lt;&#x2F;span&gt;&lt;span&gt;        rng.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;next_u64&lt;&#x2F;span&gt;&lt;span&gt;(),
+&lt;&#x2F;span&gt;&lt;span&gt;        rng.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;next_u64&lt;&#x2F;span&gt;&lt;span&gt;(),
+&lt;&#x2F;span&gt;&lt;span&gt;        rng.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;next_u64&lt;&#x2F;span&gt;&lt;span&gt;(),
+&lt;&#x2F;span&gt;&lt;span&gt;    ]
+&lt;&#x2F;span&gt;&lt;span&gt;    .&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;as_ptr&lt;&#x2F;span&gt;&lt;span&gt;()
+&lt;&#x2F;span&gt;&lt;span&gt;    .&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;cast&lt;&#x2F;span&gt;&lt;span&gt;(),
+&lt;&#x2F;span&gt;&lt;span&gt;);
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; Keep 6 bits (0-63)
+&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; v &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_and_si256&lt;&#x2F;span&gt;&lt;span&gt;(v, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_set1_epi8&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0x3F&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u8 &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;as &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;i8&lt;&#x2F;span&gt;&lt;span&gt;));
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; Mask bytes in range 36-63
+&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; gt_35 &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_cmpgt_epi8&lt;&#x2F;span&gt;&lt;span&gt;(v, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_set1_epi8&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;35&lt;&#x2F;span&gt;&lt;span&gt;));
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; Subtract 36 for those bytes
+&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; v &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_sub_epi8&lt;&#x2F;span&gt;&lt;span&gt;(v, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_and_si256&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_set1_epi8&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;36&lt;&#x2F;span&gt;&lt;span&gt;), gt_35));
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; Set each byte to 0xFF if it should be a letter (10-35), otherwise 0x00
+&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; alpha_mask &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_cmpgt_epi8&lt;&#x2F;span&gt;&lt;span&gt;(v, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_set1_epi8&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0x09&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u8 &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;as &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;i8&lt;&#x2F;span&gt;&lt;span&gt;));
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; Shift each byte so that range starts at ASCII `0`
+&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; to_numbers &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_add_epi8&lt;&#x2F;span&gt;&lt;span&gt;(v, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_set1_epi8&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0x30&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u8 &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;as &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;i8&lt;&#x2F;span&gt;&lt;span&gt;));
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; Shift bytes that should be a letter by additional 0x27, so that the range
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; starts at ASCII `a`
+&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; to_alphas &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_and_si256&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_set1_epi8&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0x27&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u8 &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;as &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;i8&lt;&#x2F;span&gt;&lt;span&gt;), alpha_mask);
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; Add shifting together to get correct bytes
+&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; v &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_add_epi8&lt;&#x2F;span&gt;&lt;span&gt;(to_numbers, to_alphas);
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;mut&lt;&#x2F;span&gt;&lt;span&gt; my_random_string &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span&gt;[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0&lt;&#x2F;span&gt;&lt;span&gt;; &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;32&lt;&#x2F;span&gt;&lt;span&gt;];
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_storeu_si256&lt;&#x2F;span&gt;&lt;span&gt;(my_random_string.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;as_mut_ptr&lt;&#x2F;span&gt;&lt;span&gt;().&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;cast&lt;&#x2F;span&gt;&lt;span&gt;(), v);
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;h2 id=&quot;performance-comparison-1&quot;&gt;Performance Comparison&lt;&#x2F;h2&gt;
+&lt;table&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;Method&lt;&#x2F;th&gt;&lt;th&gt;Block Size&lt;&#x2F;th&gt;&lt;th&gt;Throughput&lt;&#x2F;th&gt;&lt;&#x2F;tr&gt;&lt;&#x2F;thead&gt;&lt;tbody&gt;
+&lt;tr&gt;&lt;td&gt;Baseline&lt;&#x2F;td&gt;&lt;td&gt;16&lt;&#x2F;td&gt;&lt;td&gt;25.383 Melem&#x2F;s&lt;&#x2F;td&gt;&lt;&#x2F;tr&gt;
+&lt;tr&gt;&lt;td&gt;SIMD&lt;&#x2F;td&gt;&lt;td&gt;32&lt;&#x2F;td&gt;&lt;td&gt;&lt;strong&gt;107.15 Melem&#x2F;s&lt;&#x2F;strong&gt;&lt;&#x2F;td&gt;&lt;&#x2F;tr&gt;
+&lt;&#x2F;tbody&gt;&lt;&#x2F;table&gt;
+&lt;p&gt;Looking through benchmark results for each method, the performance generally improves as the block size increases.&lt;&#x2F;p&gt;
+&lt;h1 id=&quot;md5-hash&quot;&gt;MD5 Hash&lt;&#x2F;h1&gt;
+&lt;p&gt;After I implemented computing all the metrics and generating random strings, I ran some preliminary benchmarks, which showed that computing MD5 hashes was indeed the bottleneck. When I first started the project, I didn&#x27;t really want to implement MD5 myself. But at that point, it seems inevitable for me to at least investigate.&lt;&#x2F;p&gt;
+&lt;h2 id=&quot;baseline-2&quot;&gt;Baseline&lt;&#x2F;h2&gt;
+&lt;p&gt;We establish baseline using &lt;a rel=&quot;noopener nofollow noreferrer&quot; target=&quot;_blank&quot; href=&quot;https:&#x2F;&#x2F;crates.io&#x2F;crates&#x2F;md-5&quot;&gt;&lt;code&gt;md-5&lt;&#x2F;code&gt;&lt;&#x2F;a&gt; provided by &lt;a rel=&quot;noopener nofollow noreferrer&quot; target=&quot;_blank&quot; href=&quot;https:&#x2F;&#x2F;github.com&#x2F;RustCrypto&quot;&gt;&lt;code&gt;RustCrypto&lt;&#x2F;code&gt;&lt;&#x2F;a&gt;.&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;use &lt;&#x2F;span&gt;&lt;span&gt;md5::{Digest, Md5};
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;pub &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;fn &lt;&#x2F;span&gt;&lt;span style=&quot;color:#a6e22e;&quot;&gt;digest_md5&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;buf&lt;&#x2F;span&gt;&lt;span&gt;: [&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u8&lt;&#x2F;span&gt;&lt;span&gt;; 32]) -&amp;gt; [&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u8&lt;&#x2F;span&gt;&lt;span&gt;; &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;16&lt;&#x2F;span&gt;&lt;span&gt;] {
+&lt;&#x2F;span&gt;&lt;span&gt;    Md5::digest(buf.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;as_slice&lt;&#x2F;span&gt;&lt;span&gt;()).&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;into&lt;&#x2F;span&gt;&lt;span&gt;())
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;h2 id=&quot;inline-assembly&quot;&gt;Inline Assembly&lt;&#x2F;h2&gt;
+&lt;p&gt;&lt;code&gt;md-5&lt;&#x2F;code&gt; does have a feature &lt;a rel=&quot;noopener nofollow noreferrer&quot; target=&quot;_blank&quot; href=&quot;https:&#x2F;&#x2F;docs.rs&#x2F;crate&#x2F;md-5&#x2F;0.10.5&#x2F;features&quot;&gt;&lt;code&gt;asm&lt;&#x2F;code&gt;&lt;&#x2F;a&gt; that uses an assembly implementation from &lt;a rel=&quot;noopener nofollow noreferrer&quot; target=&quot;_blank&quot; href=&quot;https:&#x2F;&#x2F;www.nayuki.io&#x2F;page&#x2F;fast-md5-hash-implementation-in-x86-assembly&quot;&gt;Project Nayuki&lt;&#x2F;a&gt;. However according to &lt;a rel=&quot;noopener nofollow noreferrer&quot; target=&quot;_blank&quot; href=&quot;https:&#x2F;&#x2F;github.com&#x2F;RustCrypto&#x2F;asm-hashes&#x2F;issues&#x2F;17&quot;&gt;this issue&lt;&#x2F;a&gt;, the implementation does not work on &lt;code&gt;x86_64-pc-windows-msvc&lt;&#x2F;code&gt; target due to mismatching calling conventions. Unfortunately, that is the target of my developing machine, so I think it is a good time I start to investigate the inline assembly of Rust.&lt;&#x2F;p&gt;
+&lt;h3 id=&quot;basics-of-rust-inline-assembly&quot;&gt;Basics of Rust Inline Assembly&lt;&#x2F;h3&gt;
+&lt;p&gt;For what we concerned, Rust&#x27;s inline assembly is a macro call with 2 parts: instructions and register specifications (I omit various configuration options here). Instructions is basically a string template, with each instruction separated by &lt;code&gt;\n&lt;&#x2F;code&gt;. A little quality of life feature by &lt;code&gt;asm!()&lt;&#x2F;code&gt; is that programmer can also write multiple strings separated by comma, and the macro will automatically concatenate them by &lt;code&gt;\n&lt;&#x2F;code&gt;. The second part is a list of registers the assembly requires. Programmers are able to specify specific registers to use, or have the compiler automatically allocate registers with constraints. Programmers also need to specify whether each register is an input, an output, or some other combinations, and the compiler will generate glue code between assembly code and Rust code.&lt;&#x2F;p&gt;
+&lt;p&gt;A quick example from &lt;a rel=&quot;noopener nofollow noreferrer&quot; target=&quot;_blank&quot; href=&quot;https:&#x2F;&#x2F;doc.rust-lang.org&#x2F;rust-by-example&#x2F;unsafe&#x2F;asm.html&quot;&gt;Rust By Example&lt;&#x2F;a&gt;:&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span&gt;asm!(
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;mov {0}, {1}&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;add {0}, 5&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;out&lt;&#x2F;span&gt;&lt;span&gt;(reg) o,
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;in&lt;&#x2F;span&gt;&lt;span&gt;(reg) i,
+&lt;&#x2F;span&gt;&lt;span&gt;);
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;We can see this works very much like &lt;code&gt;format!()&lt;&#x2F;code&gt; with a little bit more custom syntax.&lt;&#x2F;p&gt;
+&lt;h3 id=&quot;basics-of-md5&quot;&gt;Basics of MD5&lt;&#x2F;h3&gt;
+&lt;p&gt;The MD5 algorithm takes data in chunks of 512 bit, with the last chunk padded. For each chunk, the data is regarded as 16 32-bit integers in little endian. And the algorithm maintains 4 32-bit integers as state. The algorithm has 4 rounds, using 4 operators known as &lt;code&gt;f&lt;&#x2F;code&gt;, &lt;code&gt;g&lt;&#x2F;code&gt;, &lt;code&gt;h&lt;&#x2F;code&gt;, and &lt;code&gt;i&lt;&#x2F;code&gt;. In each round, every input integer gets to mix with the state integers in different orders.&lt;&#x2F;p&gt;
+&lt;p&gt;For example, &lt;code&gt;f&lt;&#x2F;code&gt; operator looks like follows:&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;fn &lt;&#x2F;span&gt;&lt;span style=&quot;color:#a6e22e;&quot;&gt;operator_f&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;a&lt;&#x2F;span&gt;&lt;span&gt;: &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u32&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;b&lt;&#x2F;span&gt;&lt;span&gt;: &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u32&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;c&lt;&#x2F;span&gt;&lt;span&gt;: &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u32&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;d&lt;&#x2F;span&gt;&lt;span&gt;: &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u32&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;t&lt;&#x2F;span&gt;&lt;span&gt;: &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u32&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;s&lt;&#x2F;span&gt;&lt;span&gt;: &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u32&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;k&lt;&#x2F;span&gt;&lt;span&gt;: &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u32&lt;&#x2F;span&gt;&lt;span&gt;) -&amp;gt; &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u32 &lt;&#x2F;span&gt;&lt;span&gt;{
+&lt;&#x2F;span&gt;&lt;span&gt;    (((c &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;^&lt;&#x2F;span&gt;&lt;span&gt; d) &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;&amp;amp;&lt;&#x2F;span&gt;&lt;span&gt; b) &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;^&lt;&#x2F;span&gt;&lt;span&gt; d).&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;wrapping_add&lt;&#x2F;span&gt;&lt;span&gt;(a)
+&lt;&#x2F;span&gt;&lt;span&gt;        .&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;wrapping_add&lt;&#x2F;span&gt;&lt;span&gt;(k)
+&lt;&#x2F;span&gt;&lt;span&gt;        .&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;wrapping_add&lt;&#x2F;span&gt;&lt;span&gt;(t)
+&lt;&#x2F;span&gt;&lt;span&gt;        .&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;rotate_left&lt;&#x2F;span&gt;&lt;span&gt;(s)
+&lt;&#x2F;span&gt;&lt;span&gt;        .&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;wrapping_add&lt;&#x2F;span&gt;&lt;span&gt;(b)
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;And a sneak peek of the first round looks like follows:&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; `a`, `b`, `c`, `d` are 4 state integers, and `data` is the input
+&lt;&#x2F;span&gt;&lt;span&gt;a &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;operator_f&lt;&#x2F;span&gt;&lt;span&gt;(a, b, c, d, data[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0&lt;&#x2F;span&gt;&lt;span&gt;], &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;7&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0xd76aa478&lt;&#x2F;span&gt;&lt;span&gt;);
+&lt;&#x2F;span&gt;&lt;span&gt;b &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;operator_f&lt;&#x2F;span&gt;&lt;span&gt;(d, a, b, c, data[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;1&lt;&#x2F;span&gt;&lt;span&gt;], &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;12&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0xe8c7b756&lt;&#x2F;span&gt;&lt;span&gt;);
+&lt;&#x2F;span&gt;&lt;span&gt;c &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;operator_f&lt;&#x2F;span&gt;&lt;span&gt;(c, d, b, a, data[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;2&lt;&#x2F;span&gt;&lt;span&gt;], &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;17&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0x242070db&lt;&#x2F;span&gt;&lt;span&gt;);
+&lt;&#x2F;span&gt;&lt;span&gt;d &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;operator_f&lt;&#x2F;span&gt;&lt;span&gt;(b, c, d, a, data[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;3&lt;&#x2F;span&gt;&lt;span&gt;], &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;22&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0xc1bdceee&lt;&#x2F;span&gt;&lt;span&gt;);
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;* ... Omitted 12 more invocations in the first round ... *&#x2F;
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;For a complete explanation of MD5, read &lt;a rel=&quot;noopener nofollow noreferrer&quot; target=&quot;_blank&quot; href=&quot;https:&#x2F;&#x2F;www.comparitech.com&#x2F;blog&#x2F;information-security&#x2F;md5-algorithm-with-examples&#x2F;&quot;&gt;&lt;em&gt;The MD5 algorithm (with examples)&lt;&#x2F;em&gt;&lt;&#x2F;a&gt;.&lt;&#x2F;p&gt;
+&lt;h3 id=&quot;implement-md5-for-x86-64&quot;&gt;Implement MD5 for x86-64&lt;&#x2F;h3&gt;
+&lt;p&gt;We can do one small optimization for our case. We know our input is always 32 bytes, so the padding of the data is fixed:&lt;&#x2F;p&gt;
+&lt;table&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;Position&lt;&#x2F;th&gt;&lt;th&gt;Content&lt;&#x2F;th&gt;&lt;&#x2F;tr&gt;&lt;&#x2F;thead&gt;&lt;tbody&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;data[0..8]&lt;&#x2F;code&gt;&lt;&#x2F;td&gt;&lt;td&gt;Input data&lt;&#x2F;td&gt;&lt;&#x2F;tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;data[8]&lt;&#x2F;code&gt;&lt;&#x2F;td&gt;&lt;td&gt;&lt;code&gt;0x80&lt;&#x2F;code&gt;&lt;&#x2F;td&gt;&lt;&#x2F;tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;data[14]&lt;&#x2F;code&gt;&lt;&#x2F;td&gt;&lt;td&gt;&lt;code&gt;0x100&lt;&#x2F;code&gt;&lt;&#x2F;td&gt;&lt;&#x2F;tr&gt;
+&lt;tr&gt;&lt;td&gt;&lt;code&gt;data[9..14]&lt;&#x2F;code&gt; and &lt;code&gt;data[15]&lt;&#x2F;code&gt;&lt;&#x2F;td&gt;&lt;td&gt;All 0&lt;&#x2F;td&gt;&lt;&#x2F;tr&gt;
+&lt;&#x2F;tbody&gt;&lt;&#x2F;table&gt;
+&lt;p&gt;So, for data known to be 0, we can shave 1 &lt;code&gt;add&lt;&#x2F;code&gt; instruction from the operator.&lt;&#x2F;p&gt;
+&lt;p&gt;On x86-64, we have lots of registers available, so we can load all 4 state integers, all 8 input integers into registers, with 2 more registers used for temporaries.&lt;&#x2F;p&gt;
+&lt;p&gt;We need to perform the same operators on different registers inputs many times, so we need something like a function, but not involving the calling overhead. In other words, we want a macro.&lt;&#x2F;p&gt;
+&lt;p&gt;In &lt;code&gt;asm!()&lt;&#x2F;code&gt;, apart from using positional substitution, we can also name the registers like in &lt;code&gt;format!()&lt;&#x2F;code&gt;. And our inline assembly would look like:&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span&gt;asm!(
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;* inline assemblies *&#x2F;
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; state integers
+&lt;&#x2F;span&gt;&lt;span&gt;    a &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;inout&lt;&#x2F;span&gt;&lt;span&gt;(reg) state[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0&lt;&#x2F;span&gt;&lt;span&gt;],
+&lt;&#x2F;span&gt;&lt;span&gt;    b &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;inout&lt;&#x2F;span&gt;&lt;span&gt;(reg) state[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;1&lt;&#x2F;span&gt;&lt;span&gt;],
+&lt;&#x2F;span&gt;&lt;span&gt;    c &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;inout&lt;&#x2F;span&gt;&lt;span&gt;(reg) state[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;2&lt;&#x2F;span&gt;&lt;span&gt;],
+&lt;&#x2F;span&gt;&lt;span&gt;    d &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;inout&lt;&#x2F;span&gt;&lt;span&gt;(reg) state[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;3&lt;&#x2F;span&gt;&lt;span&gt;],
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; input integers
+&lt;&#x2F;span&gt;&lt;span&gt;    x0 &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= in&lt;&#x2F;span&gt;&lt;span&gt;(reg) data[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0&lt;&#x2F;span&gt;&lt;span&gt;],
+&lt;&#x2F;span&gt;&lt;span&gt;    x1 &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= in&lt;&#x2F;span&gt;&lt;span&gt;(reg) data[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;1&lt;&#x2F;span&gt;&lt;span&gt;],
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;* x2-x15 omitted *&#x2F;
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; clobbered temporaries
+&lt;&#x2F;span&gt;&lt;span&gt;    tmp0 &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;out&lt;&#x2F;span&gt;&lt;span&gt;(reg) &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;_&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;    tmp1 &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;out&lt;&#x2F;span&gt;&lt;span&gt;(reg) &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;_&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;);
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;So the macro needs to take &lt;code&gt;ident&lt;&#x2F;code&gt; of the register, and generates appropriate string. One thing we need to be careful is that since we operates on 32-bit integers, all registers have to appear like &lt;code&gt;{reg_name:e}&lt;&#x2F;code&gt; in the template string. Let&#x27;s see a first attempt to write &lt;code&gt;operator_f&lt;&#x2F;code&gt;.&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span&gt;#[cfg_attr(rustfmt, rustfmt_skip)]
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;macro_rules! &lt;&#x2F;span&gt;&lt;span&gt;op_f {
+&lt;&#x2F;span&gt;&lt;span&gt;    ($a: ident, $b: ident, $c: ident, $d: ident, $t: ident, $s: literal, $k: literal) &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;=&amp;gt; &lt;&#x2F;span&gt;&lt;span&gt;{
+&lt;&#x2F;span&gt;&lt;span&gt;        concat!(
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;mov {tmp0:e}, {&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;, stringify!($c), &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;:e}&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;\n&lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;add {&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;, stringify!($a), &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;:e}, {&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;, stringify!($t), &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;:e}&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;\n&lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;xor {tmp0:e}, {&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;, stringify!($d), &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;:e}&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;\n&lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;and {tmp0:e}, {&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;, stringify!($b), &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;:e}&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;\n&lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;xor {tmp0:e}, {&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;, stringify!($d), &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;:e}&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;\n&lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;lea {&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;, stringify!($a), &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;:e}, [{tmp0:e} + {&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;, stringify!($a) ,&lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;:e} + &amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;, $k ,&lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;]&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;\n&lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;rol {&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;, stringify!($a), &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;:e}, &amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;, $s, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;\n&lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;add {&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;, stringify!($a), &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;:e}, {&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;, stringify!($b), &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;:e}&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;\n&lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;        )
+&lt;&#x2F;span&gt;&lt;span&gt;    };
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;This already looks awful and close to unreadable. It is also really error-prone to write this. Note I put &lt;code&gt;#[cfg_attr(rustfmt, rustfmt_skip)]&lt;&#x2F;code&gt; at the top?, this is how it looks if I don&#x27;t do that:&lt;&#x2F;p&gt;
+&lt;details&gt;
+  &lt;summary&gt;Truly incomprehensible after formatting&lt;&#x2F;summary&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;macro_rules! &lt;&#x2F;span&gt;&lt;span&gt;op_f {
+&lt;&#x2F;span&gt;&lt;span&gt;    ($a: ident, $b: ident, $c: ident, $d: ident, $t: ident, $s: literal, $k: literal) &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;=&amp;gt; &lt;&#x2F;span&gt;&lt;span&gt;{
+&lt;&#x2F;span&gt;&lt;span&gt;        concat!(
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;mov {tmp0:e}, {&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;            stringify!($c),
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;:e}&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;\n&lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;add {&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;            stringify!($a),
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;:e}, {&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;            stringify!($t),
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;:e}&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;\n&lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;xor {tmp0:e}, {&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;            stringify!($d),
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;:e}&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;\n&lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;and {tmp0:e}, {&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;            stringify!($b),
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;:e}&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;\n&lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;xor {tmp0:e}, {&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;            stringify!($d),
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;:e}&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;\n&lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;lea {&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;            stringify!($a),
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;:e}, [{tmp0:e} + {&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;            stringify!($a),
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;:e} + &amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;            $k,
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;]&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;\n&lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;rol {&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;            stringify!($a),
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;:e}, &amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;            $s,
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;\n&lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;add {&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;            stringify!($a),
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;:e}, {&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;            stringify!($b),
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;:e}&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;\n&lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;        )
+&lt;&#x2F;span&gt;&lt;span&gt;    };
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;&#x2F;details&gt;
+&lt;hr &#x2F;&gt;
+&lt;p&gt;So we need an instruction level abstraction to make it much easier to read:&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; stringify an operand
+&lt;&#x2F;span&gt;&lt;span&gt;#[cfg_attr(rustfmt, rustfmt_skip)]
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;macro_rules! &lt;&#x2F;span&gt;&lt;span&gt;asm_operand {
+&lt;&#x2F;span&gt;&lt;span&gt;    (eax) &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;=&amp;gt; &lt;&#x2F;span&gt;&lt;span&gt;{ &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;eax&amp;quot; &lt;&#x2F;span&gt;&lt;span&gt;};
+&lt;&#x2F;span&gt;&lt;span&gt;    (ebx) &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;=&amp;gt; &lt;&#x2F;span&gt;&lt;span&gt;{ &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;ebx&amp;quot; &lt;&#x2F;span&gt;&lt;span&gt;};
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;* ... omitted transcribing all the register names ... *&#x2F;
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span&gt;    ($x: ident) &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;=&amp;gt; &lt;&#x2F;span&gt;&lt;span&gt;{
+&lt;&#x2F;span&gt;&lt;span&gt;        concat!(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;{&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;, stringify!($x), &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;:e}&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;)
+&lt;&#x2F;span&gt;&lt;span&gt;    };
+&lt;&#x2F;span&gt;&lt;span&gt;    ($x: literal) &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;=&amp;gt; &lt;&#x2F;span&gt;&lt;span&gt;{
+&lt;&#x2F;span&gt;&lt;span&gt;        stringify!($x)
+&lt;&#x2F;span&gt;&lt;span&gt;    };
+&lt;&#x2F;span&gt;&lt;span&gt;    ([ $first: tt &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;$&lt;&#x2F;span&gt;&lt;span&gt;(+ $rest: tt)&lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;*&lt;&#x2F;span&gt;&lt;span&gt; ]) &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;=&amp;gt; &lt;&#x2F;span&gt;&lt;span&gt;{
+&lt;&#x2F;span&gt;&lt;span&gt;        concat!(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;[&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;, asm_operand!($first) &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;$&lt;&#x2F;span&gt;&lt;span&gt;(, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;+&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;, asm_operand!($rest))&lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;* &lt;&#x2F;span&gt;&lt;span&gt;,&lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;]&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;)
+&lt;&#x2F;span&gt;&lt;span&gt;    };
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; stringify a block of instructions
+&lt;&#x2F;span&gt;&lt;span&gt;#[cfg_attr(rustfmt, rustfmt_skip)]
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;macro_rules! &lt;&#x2F;span&gt;&lt;span&gt;asm_block {
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; Instructions separated by semicolon
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; Each instruction is an operator followed by one or more operands
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; NOTE: does not handle 0 argument operator, labels, etc.
+&lt;&#x2F;span&gt;&lt;span&gt;    (&lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;$&lt;&#x2F;span&gt;&lt;span&gt;($op: ident $a0: tt $(, $args: tt)&lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;*&lt;&#x2F;span&gt;&lt;span&gt;);+ $(;)?) =&amp;gt; {
+&lt;&#x2F;span&gt;&lt;span&gt;        concat!(
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;$&lt;&#x2F;span&gt;&lt;span&gt;(
+&lt;&#x2F;span&gt;&lt;span&gt;                stringify!($op), &amp;quot; &amp;quot;,
+&lt;&#x2F;span&gt;&lt;span&gt;                asm_operand!($a0) $(, &amp;quot;, &amp;quot;, asm_operand!($args))*,
+&lt;&#x2F;span&gt;&lt;span&gt;                &amp;quot;\n&amp;quot;
+&lt;&#x2F;span&gt;&lt;span&gt;            ),+
+&lt;&#x2F;span&gt;&lt;span&gt;        )
+&lt;&#x2F;span&gt;&lt;span&gt;    };
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;Now we can rewrite our &lt;code&gt;op_f&lt;&#x2F;code&gt; to:&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span&gt;#[cfg_attr(rustfmt, rustfmt_skip)]
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;macro_rules! &lt;&#x2F;span&gt;&lt;span&gt;op_f {
+&lt;&#x2F;span&gt;&lt;span&gt;    ($a: ident, $b: ident, $c: ident, $d: ident, $t: tt, $s: literal, $k: literal) &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;=&amp;gt; &lt;&#x2F;span&gt;&lt;span&gt;{
+&lt;&#x2F;span&gt;&lt;span&gt;        asm_block!(
+&lt;&#x2F;span&gt;&lt;span&gt;            mov tmp0, $c;
+&lt;&#x2F;span&gt;&lt;span&gt;            add $a, $t;
+&lt;&#x2F;span&gt;&lt;span&gt;            xor tmp0, $d;
+&lt;&#x2F;span&gt;&lt;span&gt;            and tmp0, $b;
+&lt;&#x2F;span&gt;&lt;span&gt;            xor tmp0, $d;
+&lt;&#x2F;span&gt;&lt;span&gt;            lea $a, [$a &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;+&lt;&#x2F;span&gt;&lt;span&gt; tmp0 &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;+ &lt;&#x2F;span&gt;&lt;span&gt;$k];
+&lt;&#x2F;span&gt;&lt;span&gt;            rol $a, $s;
+&lt;&#x2F;span&gt;&lt;span&gt;            add $a, $b;
+&lt;&#x2F;span&gt;&lt;span&gt;        )
+&lt;&#x2F;span&gt;&lt;span&gt;    };
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;This looks much more readable, and closer to actual assembly. Note that we change &lt;code&gt;$t: ident&lt;&#x2F;code&gt; to &lt;code&gt;$t: tt&lt;&#x2F;code&gt;, for later use in x86 version. As a matter of fact, we have a tiny &amp;quot;type system&amp;quot; here to enforce the input type of the macro:&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;&lt;code&gt;ident&lt;&#x2F;code&gt; means a register,&lt;&#x2F;li&gt;
+&lt;li&gt;&lt;code&gt;literal&lt;&#x2F;code&gt; means an immediate,&lt;&#x2F;li&gt;
+&lt;li&gt;&lt;code&gt;tt&lt;&#x2F;code&gt; means anything: a register, an immediate, or a memory address &lt;code&gt;[reg1 + reg2 + imm]&lt;&#x2F;code&gt;.&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;p&gt;We can easily invoke &lt;code&gt;op_f&lt;&#x2F;code&gt; by:&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span&gt;asm!(
+&lt;&#x2F;span&gt;&lt;span&gt;    op_f!(a, b, c, d, x0, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;7&lt;&#x2F;span&gt;&lt;span&gt;,  &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0xd76aa478&lt;&#x2F;span&gt;&lt;span&gt;),
+&lt;&#x2F;span&gt;&lt;span&gt;    op_f!(d, a, b, c, x1, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;12&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0xe8c7b756&lt;&#x2F;span&gt;&lt;span&gt;),
+&lt;&#x2F;span&gt;&lt;span&gt;    op_f!(c, d, b, a, x2, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;17&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0x242070db&lt;&#x2F;span&gt;&lt;span&gt;),
+&lt;&#x2F;span&gt;&lt;span&gt;    op_f!(b, c, d, a, x3, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;22&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0xc1bdceee&lt;&#x2F;span&gt;&lt;span&gt;),
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;* ... omitted the rest of MD5 algorithm ... *&#x2F;
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; state integers
+&lt;&#x2F;span&gt;&lt;span&gt;    a &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;inout&lt;&#x2F;span&gt;&lt;span&gt;(reg) state[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0&lt;&#x2F;span&gt;&lt;span&gt;],
+&lt;&#x2F;span&gt;&lt;span&gt;    b &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;inout&lt;&#x2F;span&gt;&lt;span&gt;(reg) state[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;1&lt;&#x2F;span&gt;&lt;span&gt;],
+&lt;&#x2F;span&gt;&lt;span&gt;    c &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;inout&lt;&#x2F;span&gt;&lt;span&gt;(reg) state[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;2&lt;&#x2F;span&gt;&lt;span&gt;],
+&lt;&#x2F;span&gt;&lt;span&gt;    d &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;inout&lt;&#x2F;span&gt;&lt;span&gt;(reg) state[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;3&lt;&#x2F;span&gt;&lt;span&gt;],
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; input integers
+&lt;&#x2F;span&gt;&lt;span&gt;    x0 &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= in&lt;&#x2F;span&gt;&lt;span&gt;(reg) data[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0&lt;&#x2F;span&gt;&lt;span&gt;],
+&lt;&#x2F;span&gt;&lt;span&gt;    x1 &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= in&lt;&#x2F;span&gt;&lt;span&gt;(reg) data[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;1&lt;&#x2F;span&gt;&lt;span&gt;],
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;* x2-x7 omitted *&#x2F;
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; clobbered temporaries
+&lt;&#x2F;span&gt;&lt;span&gt;    tmp0 &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;out&lt;&#x2F;span&gt;&lt;span&gt;(reg) &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;_&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;    tmp1 &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;out&lt;&#x2F;span&gt;&lt;span&gt;(reg) &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;_&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;);
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;And it becomes straightforward to implement MD5 and apply our little optimizations.&lt;&#x2F;p&gt;
+&lt;h3 id=&quot;implement-md5-for-x86&quot;&gt;Implement MD5 for x86&lt;&#x2F;h3&gt;
+&lt;p&gt;In an ideal world, I could use the exact same assembly as in x86-64 and call it a day. Unfortunately, we need 14 general registers for our &lt;code&gt;asm!()&lt;&#x2F;code&gt; call. However, on x86, we only have 7 general registers. One idea is to keep input on stack and use a register to store the address of it. This reduces the number of registers needed to 7. However, &lt;a rel=&quot;noopener nofollow noreferrer&quot; target=&quot;_blank&quot; href=&quot;https:&#x2F;&#x2F;github.com&#x2F;rust-lang&#x2F;rust&#x2F;issues&#x2F;106781&quot;&gt;the code is not guaranteed to compile&lt;&#x2F;a&gt;. We need to manually specify each register to use, save and restore those registers to utilize them.&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span&gt;asm!(
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; Save esi and ebp
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;sub esp, 8&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;mov [esp], esi&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;mov [esp + 4], ebp&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; Move address of data to ebp
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;mov ebp, edi&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; op_f needs to be changed to use esi and edi as temp register
+&lt;&#x2F;span&gt;&lt;span&gt;    op_f!(eax, ebx, ecx, edx, [ebp], &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;7&lt;&#x2F;span&gt;&lt;span&gt;,  &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0xd76aa478&lt;&#x2F;span&gt;&lt;span&gt;),
+&lt;&#x2F;span&gt;&lt;span&gt;    op_f!(edx, eax, ebx, ecx, [ebp &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;+ &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;4&lt;&#x2F;span&gt;&lt;span&gt;], &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;12&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0xe8c7b756&lt;&#x2F;span&gt;&lt;span&gt;),
+&lt;&#x2F;span&gt;&lt;span&gt;    op_f!(ecx, edx, ebx, eax, [ebp &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;+ &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;8&lt;&#x2F;span&gt;&lt;span&gt;], &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;17&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0x242070db&lt;&#x2F;span&gt;&lt;span&gt;),
+&lt;&#x2F;span&gt;&lt;span&gt;    op_f!(ebx, ecx, edx, eax, [ebp &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;+ &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;12&lt;&#x2F;span&gt;&lt;span&gt;], &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;22&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0xc1bdceee&lt;&#x2F;span&gt;&lt;span&gt;),
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;* ... omitted the rest of MD5 algorithm ... *&#x2F;
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; Restore esi and ebp
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;mov esi, [esp]&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;mov ebp, [esp + 4]&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;add esp, 8&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; state integers
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;inout&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;eax&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;) state[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0&lt;&#x2F;span&gt;&lt;span&gt;],
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;inout&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;ebx&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;) state[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;1&lt;&#x2F;span&gt;&lt;span&gt;],
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;inout&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;ecx&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;) state[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;2&lt;&#x2F;span&gt;&lt;span&gt;],
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;inout&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;edx&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;) state[&lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;3&lt;&#x2F;span&gt;&lt;span&gt;],
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; input integers
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;in&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;edi&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;) data.&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;as_ptr&lt;&#x2F;span&gt;&lt;span&gt;(),
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; clobbered temporaries
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;lateout&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;edi&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;) &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;_&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;);
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;h2 id=&quot;simd-2&quot;&gt;SIMD&lt;&#x2F;h2&gt;
+&lt;p&gt;There is no way to apply SIMD to generate one MD5 hash. But we can fit 8 32-bit integers into a &lt;code&gt;__m256i&lt;&#x2F;code&gt;, so it is natural to compute 8 MD5 hashes simultaneously using SIMD.&lt;&#x2F;p&gt;
+&lt;p&gt;The biggest roadblock is the lack of &lt;code&gt;rol&lt;&#x2F;code&gt; in SIMD intrinsics. But no big deal, &lt;code&gt;rol&lt;&#x2F;code&gt; is just 2 bit shiftings followed by an or. One might try this:&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;unsafe &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;fn &lt;&#x2F;span&gt;&lt;span style=&quot;color:#a6e22e;&quot;&gt;rotate_left&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;x&lt;&#x2F;span&gt;&lt;span&gt;: __m256i, &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;by&lt;&#x2F;span&gt;&lt;span&gt;: &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;i32&lt;&#x2F;span&gt;&lt;span&gt;) -&amp;gt; __m256i {
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; hi &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_slli_epi32&lt;&#x2F;span&gt;&lt;span&gt;(x, by);
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; lo &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_srli_epi32&lt;&#x2F;span&gt;&lt;span&gt;(x, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;32 &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;-&lt;&#x2F;span&gt;&lt;span&gt; by);
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_or_si256&lt;&#x2F;span&gt;&lt;span&gt;(hi, lo)
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;Well this does not work, if we look closer at the signature of &lt;a rel=&quot;noopener nofollow noreferrer&quot; target=&quot;_blank&quot; href=&quot;https:&#x2F;&#x2F;doc.rust-lang.org&#x2F;stable&#x2F;core&#x2F;arch&#x2F;x86_64&#x2F;fn._mm256_slli_epi32.html&quot;&gt;&lt;code&gt;_mm256_slli_epi32&lt;&#x2F;code&gt;&lt;&#x2F;a&gt; we shall see&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;pub unsafe &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;fn &lt;&#x2F;span&gt;&lt;span style=&quot;color:#a6e22e;&quot;&gt;_mm256_slli_epi32&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;a&lt;&#x2F;span&gt;&lt;span&gt;: __m256i, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;const &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;IMM8&lt;&#x2F;span&gt;&lt;span&gt;: &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;i32&lt;&#x2F;span&gt;&lt;span&gt;) -&amp;gt; __m256i;
+&lt;&#x2F;span&gt;&lt;span&gt;                                            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;^^^^^
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;&lt;code&gt;IMM8&lt;&#x2F;code&gt; must be a constant, although the documentation is using the legacy const generics syntax, which makes it really hard to spot. One might go ahead and write:&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;unsafe &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;fn &lt;&#x2F;span&gt;&lt;span style=&quot;color:#a6e22e;&quot;&gt;rotate_left&lt;&#x2F;span&gt;&lt;span&gt;&amp;lt;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;const&lt;&#x2F;span&gt;&lt;span&gt; BY: &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;i32&lt;&#x2F;span&gt;&lt;span&gt;&amp;gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;x&lt;&#x2F;span&gt;&lt;span&gt;: __m256i) -&amp;gt; __m256i {
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; hi &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_slli_epi32&lt;&#x2F;span&gt;&lt;span&gt;(x, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;BY&lt;&#x2F;span&gt;&lt;span&gt;);
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; lo &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_srli_epi32&lt;&#x2F;span&gt;&lt;span&gt;(x, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;32 &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;- &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;BY&lt;&#x2F;span&gt;&lt;span&gt;);
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_or_si256&lt;&#x2F;span&gt;&lt;span&gt;(hi, lo)
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;Not really working, because we only have &lt;code&gt;min_const_generics&lt;&#x2F;code&gt;, which means &lt;code&gt;32 - BY&lt;&#x2F;code&gt; is not considered a constant that can be used for the purpose of const generics. I had to settle with this:&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;unsafe &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;fn &lt;&#x2F;span&gt;&lt;span style=&quot;color:#a6e22e;&quot;&gt;rotate_left&lt;&#x2F;span&gt;&lt;span&gt;&amp;lt;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;const&lt;&#x2F;span&gt;&lt;span&gt; L: &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;i32&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;const&lt;&#x2F;span&gt;&lt;span&gt; R: &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;i32&lt;&#x2F;span&gt;&lt;span&gt;&amp;gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;x&lt;&#x2F;span&gt;&lt;span&gt;: __m256i) -&amp;gt; __m256i {
+&lt;&#x2F;span&gt;&lt;span&gt;    debug_assert_eq!(L &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;+&lt;&#x2F;span&gt;&lt;span&gt; R, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;32&lt;&#x2F;span&gt;&lt;span&gt;);
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; hi &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_slli_epi32&lt;&#x2F;span&gt;&lt;span&gt;(x, L);
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; lo &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_srli_epi32&lt;&#x2F;span&gt;&lt;span&gt;(x, R);
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_or_si256&lt;&#x2F;span&gt;&lt;span&gt;(hi, lo)
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;Not the best solution, but it works. Implementation for the MD5 rounds is easy:&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;unsafe &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;fn &lt;&#x2F;span&gt;&lt;span style=&quot;color:#a6e22e;&quot;&gt;op_f&lt;&#x2F;span&gt;&lt;span&gt;&amp;lt;&lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;const&lt;&#x2F;span&gt;&lt;span&gt; L: &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;i32&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;const&lt;&#x2F;span&gt;&lt;span&gt; R: &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;i32&lt;&#x2F;span&gt;&lt;span&gt;&amp;gt;(
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;mut &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;a&lt;&#x2F;span&gt;&lt;span&gt;: __m256i,
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;b&lt;&#x2F;span&gt;&lt;span&gt;: __m256i,
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;c&lt;&#x2F;span&gt;&lt;span&gt;: __m256i,
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;d&lt;&#x2F;span&gt;&lt;span&gt;: __m256i,
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;t&lt;&#x2F;span&gt;&lt;span&gt;: __m256i,
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;k&lt;&#x2F;span&gt;&lt;span&gt;: &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u32&lt;&#x2F;span&gt;&lt;span&gt;,
+&lt;&#x2F;span&gt;&lt;span&gt;) -&amp;gt; __m256i {
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let&lt;&#x2F;span&gt;&lt;span&gt; k &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_set1_epi32&lt;&#x2F;span&gt;&lt;span&gt;(k &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;as &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;i32&lt;&#x2F;span&gt;&lt;span&gt;);
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;let &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;mut&lt;&#x2F;span&gt;&lt;span&gt; tmp &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_xor_si256&lt;&#x2F;span&gt;&lt;span&gt;(c, d);
+&lt;&#x2F;span&gt;&lt;span&gt;    a &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_add_epi32&lt;&#x2F;span&gt;&lt;span&gt;(a, t);
+&lt;&#x2F;span&gt;&lt;span&gt;    tmp &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_and_si256&lt;&#x2F;span&gt;&lt;span&gt;(tmp, b);
+&lt;&#x2F;span&gt;&lt;span&gt;    tmp &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_xor_si256&lt;&#x2F;span&gt;&lt;span&gt;(tmp, d);
+&lt;&#x2F;span&gt;&lt;span&gt;    a &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_add_epi32&lt;&#x2F;span&gt;&lt;span&gt;(a, k);
+&lt;&#x2F;span&gt;&lt;span&gt;    a &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_add_epi32&lt;&#x2F;span&gt;&lt;span&gt;(a, tmp);
+&lt;&#x2F;span&gt;&lt;span&gt;    a &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span&gt;rotate_left::&amp;lt;L, R&amp;gt;(a);
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;_mm256_add_epi32&lt;&#x2F;span&gt;&lt;span&gt;(a, b)
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;And the invocations look like:&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span&gt;a &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span&gt;op_f::&amp;lt;7, 25&amp;gt;(a, b, c, d, x0, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0xd76aa478&lt;&#x2F;span&gt;&lt;span&gt;);
+&lt;&#x2F;span&gt;&lt;span&gt;d &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span&gt;op_f::&amp;lt;12, 20&amp;gt;(d, a, b, c, x1, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0xe8c7b756&lt;&#x2F;span&gt;&lt;span&gt;);
+&lt;&#x2F;span&gt;&lt;span&gt;c &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span&gt;op_f::&amp;lt;17, 15&amp;gt;(c, d, a, b, x2, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0x242070db&lt;&#x2F;span&gt;&lt;span&gt;);
+&lt;&#x2F;span&gt;&lt;span&gt;b &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span&gt;op_f::&amp;lt;22, 10&amp;gt;(b, c, d, a, x3, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;0xc1bdceee&lt;&#x2F;span&gt;&lt;span&gt;);
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;h2 id=&quot;performance-comparison-2&quot;&gt;Performance Comparison&lt;&#x2F;h2&gt;
+&lt;table&gt;&lt;thead&gt;&lt;tr&gt;&lt;th&gt;Method&lt;&#x2F;th&gt;&lt;th&gt;Block Size&lt;&#x2F;th&gt;&lt;th&gt;Throughput&lt;&#x2F;th&gt;&lt;&#x2F;tr&gt;&lt;&#x2F;thead&gt;&lt;tbody&gt;
+&lt;tr&gt;&lt;td&gt;Baseline&lt;&#x2F;td&gt;&lt;td&gt;32&lt;&#x2F;td&gt;&lt;td&gt;8.5480 Melem&#x2F;s&lt;&#x2F;td&gt;&lt;&#x2F;tr&gt;
+&lt;tr&gt;&lt;td&gt;Assembly&lt;&#x2F;td&gt;&lt;td&gt;8&lt;&#x2F;td&gt;&lt;td&gt;10.229 Melem&#x2F;s&lt;&#x2F;td&gt;&lt;&#x2F;tr&gt;
+&lt;tr&gt;&lt;td&gt;SIMD&lt;&#x2F;td&gt;&lt;td&gt;8&lt;&#x2F;td&gt;&lt;td&gt;&lt;strong&gt;59.416 Melem&#x2F;s&lt;&#x2F;strong&gt;&lt;&#x2F;td&gt;&lt;&#x2F;tr&gt;
+&lt;&#x2F;tbody&gt;&lt;&#x2F;table&gt;
+&lt;p&gt;The assembly version does not have much of a performance gain over baseline, which is in line with the observation by Project Nayuki. The SIMD version gives us quite some performance boost.&lt;&#x2F;p&gt;
+&lt;h1 id=&quot;putting-it-together&quot;&gt;Putting It Together&lt;&#x2F;h1&gt;
+&lt;p&gt;I quickly put everything together:&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;$n$ (default to be the value of &lt;a rel=&quot;noopener nofollow noreferrer&quot; target=&quot;_blank&quot; href=&quot;https:&#x2F;&#x2F;doc.rust-lang.org&#x2F;stable&#x2F;std&#x2F;thread&#x2F;fn.available_parallelism.html&quot;&gt;&lt;code&gt;available_parallelism()&lt;&#x2F;code&gt;&lt;&#x2F;a&gt;) threads to generate random strings, compute their MD5s, and compute metrics. Each thread maintains the thread-local best for each metric and passes that to the main thread every 1024 (a hand-wavy constant I chose) strings generated.&lt;&#x2F;li&gt;
+&lt;li&gt;One thread to update the terminal UI.&lt;&#x2F;li&gt;
+&lt;li&gt;Main thread maintains the global best and notifies the UI thread for updates.&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;p&gt;For the terminal UI, I wanted a live update UI like &lt;code&gt;vnstat -l&lt;&#x2F;code&gt; or &lt;code&gt;wget&lt;&#x2F;code&gt;. Unfortunately, &lt;code&gt;tui&lt;&#x2F;code&gt; only supports full-screen app. My workaround was to use &lt;a rel=&quot;noopener nofollow noreferrer&quot; target=&quot;_blank&quot; href=&quot;https:&#x2F;&#x2F;crates.io&#x2F;crates&#x2F;indicatif&quot;&gt;&lt;code&gt;indicatif&lt;&#x2F;code&gt;&lt;&#x2F;a&gt;, and customize the appearance of the progress bars to make it look like a live update.&lt;&#x2F;p&gt;
+&lt;p&gt;On my developing machine (AMD Ryzen 5900X), when running 24 workers, I can get about 0.5B strings generated and tested per second.&lt;&#x2F;p&gt;
+&lt;p&gt;&lt;img src=&quot;&#x2F;images&#x2F;posts&#x2F;finding-nice-md5s-using-rust&#x2F;bin-screenshot.png&quot; alt=&quot;Screenshot&quot; &#x2F;&gt;&lt;&#x2F;p&gt;
+&lt;h1 id=&quot;thoughts&quot;&gt;Thoughts&lt;&#x2F;h1&gt;
+&lt;p&gt;Overall, this is quite a nice little pet project to get me familiar with SIMD and inline assembly in Rust, arguably one of the &lt;code&gt;unsafe&lt;&#x2F;code&gt;st part of Rust. The result performance is within my expectation. I do have some thoughts on what can be improved to smooth out the developing experience:&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;
+&lt;p&gt;Supporting SIMD on both &lt;code&gt;x86&lt;&#x2F;code&gt; and &lt;code&gt;x86-64&lt;&#x2F;code&gt; is a pain. Every import turns into two, and rust-analyzer won&#x27;t automatically add a new import into the other one. It could easily become&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span&gt;#[cfg(target_arch &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;x86&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;)]
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;use &lt;&#x2F;span&gt;&lt;span&gt;std::arch::x86::{
+&lt;&#x2F;span&gt;&lt;span&gt;    __m256i, _mm256_add_epi32, _mm256_and_si256, _mm256_loadu_si256, _mm256_or_si256,
+&lt;&#x2F;span&gt;&lt;span&gt;    _mm256_set1_epi32, _mm256_set1_epi8, _mm256_slli_epi32, _mm256_srli_epi32,
+&lt;&#x2F;span&gt;&lt;span&gt;    _mm256_storeu_si256, _mm256_xor_si256,
+&lt;&#x2F;span&gt;&lt;span&gt;};
+&lt;&#x2F;span&gt;&lt;span&gt;#[cfg(target_arch &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;x86_64&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;)]
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;use &lt;&#x2F;span&gt;&lt;span&gt;std::arch::x86_64::{
+&lt;&#x2F;span&gt;&lt;span&gt;    __m256i, _mm256_add_epi32, _mm256_and_si256, _mm256_loadu_si256, _mm256_or_si256,
+&lt;&#x2F;span&gt;&lt;span&gt;    _mm256_set1_epi32, _mm256_set1_epi8, _mm256_slli_epi32, _mm256_srli_epi32,
+&lt;&#x2F;span&gt;&lt;span&gt;    _mm256_storeu_si256, _mm256_xor_si256,
+&lt;&#x2F;span&gt;&lt;span&gt;};
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;Not a fan. I had to make this macro&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;macro_rules! &lt;&#x2F;span&gt;&lt;span&gt;use_intrinsic {
+&lt;&#x2F;span&gt;&lt;span&gt;    (&lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;$&lt;&#x2F;span&gt;&lt;span&gt;($item: tt), &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;+ $&lt;&#x2F;span&gt;&lt;span&gt;(,)?) &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;=&amp;gt; &lt;&#x2F;span&gt;&lt;span&gt;{
+&lt;&#x2F;span&gt;&lt;span&gt;        #[cfg(target_arch &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;x86&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;)]
+&lt;&#x2F;span&gt;&lt;span&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;use &lt;&#x2F;span&gt;&lt;span&gt;std::arch::x86::{&lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;$&lt;&#x2F;span&gt;&lt;span&gt;($item), &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;+&lt;&#x2F;span&gt;&lt;span&gt;};
+&lt;&#x2F;span&gt;&lt;span&gt;        #[cfg(target_arch &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;x86_64&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;)]
+&lt;&#x2F;span&gt;&lt;span&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;use &lt;&#x2F;span&gt;&lt;span&gt;std::arch::x86_64::{&lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;$&lt;&#x2F;span&gt;&lt;span&gt;($item), &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;+&lt;&#x2F;span&gt;&lt;span&gt;};
+&lt;&#x2F;span&gt;&lt;span&gt;    };
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;and I can write&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span&gt;use_intrinsic! {
+&lt;&#x2F;span&gt;&lt;span&gt;    __m256i, _mm256_add_epi32, _mm256_and_si256, _mm256_loadu_si256, _mm256_or_si256,
+&lt;&#x2F;span&gt;&lt;span&gt;    _mm256_set1_epi32, _mm256_set1_epi8, _mm256_slli_epi32, _mm256_srli_epi32,
+&lt;&#x2F;span&gt;&lt;span&gt;    _mm256_storeu_si256, _mm256_xor_si256,
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;Though I now completely lose the ability to automatically add imports through rust-analyzer. One may suggest&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span&gt;#[cfg(target_arch &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;x86&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;)]
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;use &lt;&#x2F;span&gt;&lt;span&gt;std::arch::x86::&lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;*&lt;&#x2F;span&gt;&lt;span&gt;;
+&lt;&#x2F;span&gt;&lt;span&gt;#[cfg(target_arch &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;= &lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;x86_64&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;)]
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;use &lt;&#x2F;span&gt;&lt;span&gt;std::arch::x86_64::&lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;*&lt;&#x2F;span&gt;&lt;span&gt;;
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;But this makes my editor very laggy.&lt;&#x2F;p&gt;
+&lt;p&gt;No perfect solution either way, and I wonder whether some improvements can be made here.&lt;&#x2F;p&gt;
+&lt;&#x2F;li&gt;
+&lt;li&gt;
+&lt;p&gt;Trying to keep DRY when using inline assembly is hard. I do think with more careful design, my little &lt;code&gt;asm_operand&lt;&#x2F;code&gt;, &lt;code&gt;asm_block&lt;&#x2F;code&gt; macros may be able to grow into a more robust library to provide better user experience when writing inline assembly. I do hope more experienced community member can chime in and explore the idea with me.&lt;&#x2F;p&gt;
+&lt;&#x2F;li&gt;
+&lt;li&gt;
+&lt;p&gt;I do think it is a bug that a piece of code only compiles with &lt;code&gt;#[inline(never)]&lt;&#x2F;code&gt;, so I hope &lt;a rel=&quot;noopener nofollow noreferrer&quot; target=&quot;_blank&quot; href=&quot;https:&#x2F;&#x2F;github.com&#x2F;rust-lang&#x2F;rust&#x2F;issues&#x2F;106781&quot;&gt;this issue&lt;&#x2F;a&gt; gets addressed. Most importantly &lt;code&gt;#[inline(never)]&lt;&#x2F;code&gt; is only a hint, so it shouldn&#x27;t affect whether the compilation succeeds or not.&lt;&#x2F;p&gt;
+&lt;&#x2F;li&gt;
+&lt;li&gt;
+&lt;p&gt;I like the fine control of the &lt;a rel=&quot;noopener nofollow noreferrer&quot; target=&quot;_blank&quot; href=&quot;https:&#x2F;&#x2F;doc.rust-lang.org&#x2F;nightly&#x2F;reference&#x2F;attributes&#x2F;codegen.html#the-target_feature-attribute&quot;&gt;&lt;code&gt;target_feature&lt;&#x2F;code&gt; attribute&lt;&#x2F;a&gt;. This allows me to compile the code without &lt;code&gt;-C target-cpu=native&lt;&#x2F;code&gt;, but still get SIMD after runtime detection if my CPU supports it. But this forces the function to be &lt;code&gt;unsafe&lt;&#x2F;code&gt;, for good reason. But if I want to have a trait for both non-SIMD implementation and SIMD implementation, I will run into a dilemma:&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;I can make two traits, one for safe Rust (non-SIMD), and one for unsafe Rust (SIMD). But DRY be damned.&lt;&#x2F;li&gt;
+&lt;li&gt;I can make a safe function, assuming runtime checks has been done, calls the unsafe SIMD function. But I technically create a safe function that is unsound, lose the protection from compiler, and rely on downstream developers to read the documentation.&lt;&#x2F;li&gt;
+&lt;li&gt;I can still make a safe function, but adding &lt;code&gt;assert!()&lt;&#x2F;code&gt; to asserts the existence of the features required. But if I am so desperate that I use SIMD, that will be an expensive one in a hot loop.&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;p&gt;At the end of the day, I made some compromises. I added &lt;code&gt;debug_assert!()&lt;&#x2F;code&gt; for feature detections in my function to hope bugs could be caught while running tests, benchmarks and so on.&lt;&#x2F;p&gt;
+&lt;p&gt;I thought of a system which uses type system to guard detection of feature. Here is a sketch&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;trait &lt;&#x2F;span&gt;&lt;span&gt;Feature {
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;fn &lt;&#x2F;span&gt;&lt;span style=&quot;color:#a6e22e;&quot;&gt;detect&lt;&#x2F;span&gt;&lt;span&gt;() -&amp;gt; &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;bool&lt;&#x2F;span&gt;&lt;span&gt;;
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; Bunch of feature types
+&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;struct &lt;&#x2F;span&gt;&lt;span&gt;SSE2;
+&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;impl &lt;&#x2F;span&gt;&lt;span&gt;Feature &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;for &lt;&#x2F;span&gt;&lt;span&gt;SSE2 {
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;fn &lt;&#x2F;span&gt;&lt;span style=&quot;color:#a6e22e;&quot;&gt;detect&lt;&#x2F;span&gt;&lt;span&gt;() -&amp;gt; &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;bool &lt;&#x2F;span&gt;&lt;span&gt;{
+&lt;&#x2F;span&gt;&lt;span&gt;        is_x86_feature_detected!(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;sse2&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;)
+&lt;&#x2F;span&gt;&lt;span&gt;    }
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;struct &lt;&#x2F;span&gt;&lt;span&gt;AVX2;
+&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;impl &lt;&#x2F;span&gt;&lt;span&gt;Feature &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;for &lt;&#x2F;span&gt;&lt;span&gt;AVX2 {
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;fn &lt;&#x2F;span&gt;&lt;span style=&quot;color:#a6e22e;&quot;&gt;detect&lt;&#x2F;span&gt;&lt;span&gt;() -&amp;gt; &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;bool &lt;&#x2F;span&gt;&lt;span&gt;{
+&lt;&#x2F;span&gt;&lt;span&gt;        is_x86_feature_detected!(&lt;&#x2F;span&gt;&lt;span style=&quot;color:#e6db74;&quot;&gt;&amp;quot;avx2&amp;quot;&lt;&#x2F;span&gt;&lt;span&gt;)
+&lt;&#x2F;span&gt;&lt;span&gt;    }
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;impl&lt;&#x2F;span&gt;&lt;span&gt;&amp;lt;F0&amp;gt; Feature &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;for&lt;&#x2F;span&gt;&lt;span&gt; (F0)
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;where
+&lt;&#x2F;span&gt;&lt;span&gt;    F0: Feature,
+&lt;&#x2F;span&gt;&lt;span&gt;{
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;fn &lt;&#x2F;span&gt;&lt;span style=&quot;color:#a6e22e;&quot;&gt;detect&lt;&#x2F;span&gt;&lt;span&gt;() -&amp;gt; &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;bool &lt;&#x2F;span&gt;&lt;span&gt;{
+&lt;&#x2F;span&gt;&lt;span&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;F0&lt;&#x2F;span&gt;&lt;span&gt;::detect()
+&lt;&#x2F;span&gt;&lt;span&gt;    }
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;impl&lt;&#x2F;span&gt;&lt;span&gt;&amp;lt;F0, F1&amp;gt; Feature &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;for&lt;&#x2F;span&gt;&lt;span&gt; (F0, F1)
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;where
+&lt;&#x2F;span&gt;&lt;span&gt;    F0: Feature,
+&lt;&#x2F;span&gt;&lt;span&gt;    F1: Feature,
+&lt;&#x2F;span&gt;&lt;span&gt;{
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;fn &lt;&#x2F;span&gt;&lt;span style=&quot;color:#a6e22e;&quot;&gt;detect&lt;&#x2F;span&gt;&lt;span&gt;() -&amp;gt; &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;bool &lt;&#x2F;span&gt;&lt;span&gt;{
+&lt;&#x2F;span&gt;&lt;span&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;F0&lt;&#x2F;span&gt;&lt;span&gt;::detect() &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;&amp;amp;&amp;amp; &lt;&#x2F;span&gt;&lt;span style=&quot;color:#ae81ff;&quot;&gt;F1&lt;&#x2F;span&gt;&lt;span&gt;::detect()
+&lt;&#x2F;span&gt;&lt;span&gt;    }
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;* omitted more impl for longer tuple *&#x2F;
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;* omitted some macro magic to make a larger tuple into-able to its subset *&#x2F;
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span&gt;#[derive(Clone, Copy)]
+&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;struct &lt;&#x2F;span&gt;&lt;span&gt;FeatureToken&amp;lt;T&amp;gt;(PhantomData&amp;lt;T&amp;gt;);
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;impl&lt;&#x2F;span&gt;&lt;span&gt;&amp;lt;T: Feature&amp;gt; FeatureToken&amp;lt;T&amp;gt; {
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;fn &lt;&#x2F;span&gt;&lt;span style=&quot;color:#a6e22e;&quot;&gt;new&lt;&#x2F;span&gt;&lt;span&gt;() -&amp;gt; &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;Option&lt;&#x2F;span&gt;&lt;span&gt;&amp;lt;&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;Self&lt;&#x2F;span&gt;&lt;span&gt;&amp;gt; {
+&lt;&#x2F;span&gt;&lt;span&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;if &lt;&#x2F;span&gt;&lt;span&gt;T::detect() {
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;Some&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;Self&lt;&#x2F;span&gt;&lt;span&gt;(PhantomData))
+&lt;&#x2F;span&gt;&lt;span&gt;        } &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;else &lt;&#x2F;span&gt;&lt;span&gt;{
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;None
+&lt;&#x2F;span&gt;&lt;span&gt;        }
+&lt;&#x2F;span&gt;&lt;span&gt;    }
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span&gt;
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;&#x2F;&#x2F; we can have functions like this
+&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;fn &lt;&#x2F;span&gt;&lt;span style=&quot;color:#a6e22e;&quot;&gt;this_fn_needs_sse2_and_avx2&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;a&lt;&#x2F;span&gt;&lt;span&gt;: &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u32&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;b&lt;&#x2F;span&gt;&lt;span&gt;: &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;u32&lt;&#x2F;span&gt;&lt;span&gt;, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;_&lt;&#x2F;span&gt;&lt;span&gt;: FeatureToken&amp;lt;(SSE2, AVX2)&amp;gt;);
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;The only way &lt;code&gt;FeatureToken&amp;lt;(SSE2, AVX2)&amp;gt;&lt;&#x2F;code&gt; can be created is by testing features, so the type system should ensure that such function is only called when we actually does the runtime feature detection, and tested feature exists.&lt;&#x2F;p&gt;
+&lt;&#x2F;li&gt;
+&lt;li&gt;
+&lt;p&gt;I think the legacy const generics syntax in documentation is easy to miss&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;rust&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-rust &quot;&gt;&lt;code class=&quot;language-rust&quot; data-lang=&quot;rust&quot;&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;pub unsafe &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;fn &lt;&#x2F;span&gt;&lt;span style=&quot;color:#a6e22e;&quot;&gt;_mm256_slli_epi32&lt;&#x2F;span&gt;&lt;span&gt;(&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;a&lt;&#x2F;span&gt;&lt;span&gt;: __m256i, &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;const &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;IMM8&lt;&#x2F;span&gt;&lt;span&gt;: &lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;i32&lt;&#x2F;span&gt;&lt;span&gt;) -&amp;gt; __m256i;
+&lt;&#x2F;span&gt;&lt;span&gt;                                            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;^^^^^
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;We almost never encounter this syntax anywhere else in Rust, and it is easy to skim over it. I think &lt;code&gt;rustdoc&lt;&#x2F;code&gt; should make this easier to spot.&lt;&#x2F;p&gt;
+&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;p&gt;One more thing: the friend who sent me the link did a crude CUDA implementation in C++ (to solve a simplified version) after seeing me having fun with this. His preliminary result showed about 40B&#x2F;s on a 3070. I might revisit this one day to try out &lt;a rel=&quot;noopener nofollow noreferrer&quot; target=&quot;_blank&quot; href=&quot;https:&#x2F;&#x2F;github.com&#x2F;Rust-GPU&#x2F;Rust-CUDA&quot;&gt;&lt;code&gt;Rust-CUDA&lt;&#x2F;code&gt;&lt;&#x2F;a&gt;, but that&#x27;s the story for another day!&lt;&#x2F;p&gt;
+</content>
+	</entry>
+	<entry xml:lang="en">
+		<title>TikZ Externalization for Beamer</title>
+		<published>2021-10-27T00:00:00+00:00</published>
+		<updated>2021-10-27T00:00:00+00:00</updated>
+		<link rel="alternate" href="/posts/tikz-externalization-reuse-for-beamer/" type="text/html"/>
+		<id>/posts/tikz-externalization-reuse-for-beamer/</id>
+		<content type="html">&lt;p&gt;Recently I made a presentation for a talk on &lt;a rel=&quot;noopener nofollow noreferrer&quot; target=&quot;_blank&quot; href=&quot;https:&#x2F;&#x2F;comptag.github.io&#x2F;fwcg21&#x2F;&quot;&gt;FWCG2021&lt;&#x2F;a&gt;. As always I went to Beamer. What was different this time was that I needed many figures, I mean, a lot. On top of that, I wanted to do overlays on these figures. Overleaf timed out when trying to compile all the TikZ figures so I turned to &lt;a rel=&quot;noopener nofollow noreferrer&quot; target=&quot;_blank&quot; href=&quot;https:&#x2F;&#x2F;www.overleaf.com&#x2F;learn&#x2F;latex&#x2F;Questions&#x2F;I_have_a_lot_of_tikz%2C_matlab2tikz_or_pgfplots_figures%2C_so_I%27m_getting_a_compilation_timeout._Can_I_externalise_my_figures%3F&quot;&gt;&lt;code&gt;external&lt;&#x2F;code&gt;&lt;&#x2F;a&gt;. There are a lot of files to generate when I built the presentation locally and it was unbearably slow. Maybe there&#x27;s a way to reduce the time, at least a little bit?&lt;&#x2F;p&gt;
+&lt;span id=&quot;continue-reading&quot;&gt;&lt;&#x2F;span&gt;&lt;h1 id=&quot;vanilla-tikz-externalization&quot;&gt;Vanilla TikZ Externalization&lt;&#x2F;h1&gt;
+&lt;p&gt;Using the vanilla TikZ externalization is easy, simply put&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;ltx&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-ltx &quot;&gt;&lt;code class=&quot;language-ltx&quot; data-lang=&quot;ltx&quot;&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\usetikzlibrary&lt;&#x2F;span&gt;&lt;span&gt;{external}
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\tikzexternalize &lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;% or optionally \tikzexternalize[prefix=some_directory&#x2F;]
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;in the &lt;code&gt;main.tex&lt;&#x2F;code&gt;. Now the LaTeX compiler will spawn another process to compile a TikZ environment into some separated files whenever it encounters one.&lt;&#x2F;p&gt;
+&lt;p&gt;Properties of the vanilla approach:&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;By default, the name of the files generating by an environment will be &lt;code&gt;figure-{num}&lt;&#x2F;code&gt;, where &lt;code&gt;{num}&lt;&#x2F;code&gt; is automatically incremented.
+Using &lt;code&gt;\tikzsetnextfilename&lt;&#x2F;code&gt; could set the file name, but the &amp;quot;same&amp;quot; environment in later overlays will not be generated since they have the same name and TikZ doesn&#x27;t think they are different.&lt;&#x2F;li&gt;
+&lt;li&gt;Each TikZ environment generates 4 files:
+&lt;ol&gt;
+&lt;li&gt;&lt;code&gt;{name}.log&lt;&#x2F;code&gt;: the log of the individual process compiling this environment.&lt;&#x2F;li&gt;
+&lt;li&gt;&lt;code&gt;{name}.md5&lt;&#x2F;code&gt;: the MD5 hash of the input to the TikZ environment, pre-expaned.&lt;&#x2F;li&gt;
+&lt;li&gt;&lt;code&gt;{name}.dpth&lt;&#x2F;code&gt;: the auxiliary file to include when loading externalized figure.&lt;&#x2F;li&gt;
+&lt;li&gt;&lt;code&gt;{name}.pdf&lt;&#x2F;code&gt;: the generated figure.&lt;&#x2F;li&gt;
+&lt;&#x2F;ol&gt;
+&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;p&gt;So if we set up a TikZ figure as follows,&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;ltx&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-ltx &quot;&gt;&lt;code class=&quot;language-ltx&quot; data-lang=&quot;ltx&quot;&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;\begin&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;frame&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span&gt;  &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;\begin&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;tikzpicture&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\node&lt;&#x2F;span&gt;&lt;span&gt;[draw, circle] (n) at (0, 0) {&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\alt&lt;&#x2F;span&gt;&lt;span&gt;&amp;lt;2&amp;gt;{1}{2}};
+&lt;&#x2F;span&gt;&lt;span&gt;  &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;\end&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;tikzpicture&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;\end&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;frame&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;where we want the node label to be &lt;code&gt;1&lt;&#x2F;code&gt; on the first overlay, and &lt;code&gt;2&lt;&#x2F;code&gt; on the second overlay. In this snippet, beamer won&#x27;t recognize the existence of the second overlay, and only one overlay will be generated.&lt;&#x2F;p&gt;
+&lt;h1 id=&quot;prior-arts&quot;&gt;Prior Arts&lt;&#x2F;h1&gt;
+&lt;p&gt;The most immediate problem to solve is to make externalization to generate different figures across overlays. Such question was asked and answered before.&lt;&#x2F;p&gt;
+&lt;h2 id=&quot;without-custom-filename&quot;&gt;Without Custom Filename&lt;&#x2F;h2&gt;
+&lt;p&gt;The earliest reference I could find is due to &lt;a rel=&quot;noopener nofollow noreferrer&quot; target=&quot;_blank&quot; href=&quot;https:&#x2F;&#x2F;tex.stackexchange.com&#x2F;questions&#x2F;78955&#x2F;use-tikz-external-feature-with-beamer-only&quot;&gt;this TeX stackexchange question&lt;&#x2F;a&gt;, in which 2 methods were given. The main idea is to let beamer know how many overlay is needed, and externalization should automatically generate figures for each overlay, with incrementing name.&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;
+&lt;p&gt;&lt;a rel=&quot;noopener nofollow noreferrer&quot; target=&quot;_blank&quot; href=&quot;https:&#x2F;&#x2F;tex.stackexchange.com&#x2F;a&#x2F;79461&#x2F;73509&quot;&gt;Christian Feuersänger&#x27;s Solution&lt;&#x2F;a&gt;&lt;&#x2F;p&gt;
+&lt;p&gt;The idea is simple, wrap the TikZ environment by a &lt;code&gt;\only&lt;&#x2F;code&gt; call indicating the number of overlays needed in the frame. So the prior example becomes:&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;ltx&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-ltx &quot;&gt;&lt;code class=&quot;language-ltx&quot; data-lang=&quot;ltx&quot;&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;\begin&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;frame&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span&gt;  &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\only&lt;&#x2F;span&gt;&lt;span&gt;&amp;lt;1-2&amp;gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;\begin&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;tikzpicture&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span&gt;      &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\node&lt;&#x2F;span&gt;&lt;span&gt;[draw, circle] (n) at (0, 0) {&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\alt&lt;&#x2F;span&gt;&lt;span&gt;&amp;lt;2&amp;gt;{1}{2}};
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;\end&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;tikzpicture&lt;&#x2F;span&gt;&lt;span&gt;}&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span&gt;  }&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;\end&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;frame&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;One downside is the need to explicitly spell out the required overlays.&lt;&#x2F;p&gt;
+&lt;&#x2F;li&gt;
+&lt;li&gt;
+&lt;p&gt;&lt;a rel=&quot;noopener nofollow noreferrer&quot; target=&quot;_blank&quot; href=&quot;https:&#x2F;&#x2F;tex.stackexchange.com&#x2F;a&#x2F;79572&#x2F;73509&quot;&gt;Andrew Stacey&#x27;s Solution&lt;&#x2F;a&gt;&lt;&#x2F;p&gt;
+&lt;p&gt;The idea is to communicate the need for more overlays in the &lt;code&gt;.dpth&lt;&#x2F;code&gt; file to the main process, and turn off some optimizations to make sure such communication happens. Andrew made a TikZ preset for this:&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;ltx&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-ltx &quot;&gt;&lt;code class=&quot;language-ltx&quot; data-lang=&quot;ltx&quot;&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\makeatletter
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\tikzset&lt;&#x2F;span&gt;&lt;span&gt;{
+&lt;&#x2F;span&gt;&lt;span&gt;  beamer externalising&#x2F;.style={&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span&gt;    execute at end picture={&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span&gt;      &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\tikzifexternalizing&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\ifbeamer@anotherslide
+&lt;&#x2F;span&gt;&lt;span&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\pgfexternalstorecommand&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\string\global\string\beamer@anotherslidetrue&lt;&#x2F;span&gt;&lt;span&gt;}&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;\fi
+&lt;&#x2F;span&gt;&lt;span&gt;      }{}&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span&gt;    }&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span&gt;  },
+&lt;&#x2F;span&gt;&lt;span&gt;  external&#x2F;optimize=false
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\makeatother
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;And all it takes to use it is just to apply the style for the environment:&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;ltx&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-ltx &quot;&gt;&lt;code class=&quot;language-ltx&quot; data-lang=&quot;ltx&quot;&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;\begin&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;frame&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span&gt;  &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;\begin&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;tikzpicture&lt;&#x2F;span&gt;&lt;span&gt;}[beamer externalising]
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\node&lt;&#x2F;span&gt;&lt;span&gt;[draw, circle] (n) at (0, 0) {&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\alt&lt;&#x2F;span&gt;&lt;span&gt;&amp;lt;2&amp;gt;{1}{2}};
+&lt;&#x2F;span&gt;&lt;span&gt;  &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;\end&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;tikzpicture&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;\end&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;frame&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;p&gt;The main drawbacks of these two solutions are:&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;
+&lt;p&gt;Setting a custom filename for the figure does not work. Consider the following snippet:&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;ltx&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-ltx &quot;&gt;&lt;code class=&quot;language-ltx&quot; data-lang=&quot;ltx&quot;&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;\begin&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;frame&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span&gt;  &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\tikzsetnextfilename&lt;&#x2F;span&gt;&lt;span&gt;{test}
+&lt;&#x2F;span&gt;&lt;span&gt;  &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\only&lt;&#x2F;span&gt;&lt;span&gt;&amp;lt;1-2&amp;gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;\begin&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;tikzpicture&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span&gt;      &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\node&lt;&#x2F;span&gt;&lt;span&gt;[draw, circle] (n) at (0, 0) {&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\alt&lt;&#x2F;span&gt;&lt;span&gt;&amp;lt;2&amp;gt;{1}{2}};
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;\end&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;tikzpicture&lt;&#x2F;span&gt;&lt;span&gt;}&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span&gt;  }&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;\end&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;frame&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;ol&gt;
+&lt;li&gt;On overlay 1, &lt;code&gt;test.log&lt;&#x2F;code&gt;, &lt;code&gt;test.md5&lt;&#x2F;code&gt;, &lt;code&gt;test.dpth&lt;&#x2F;code&gt;, and &lt;code&gt;test.pdf&lt;&#x2F;code&gt; are produced, which correctly reflect the first overlay.&lt;&#x2F;li&gt;
+&lt;li&gt;On overlay 2, the &lt;strong&gt;unexpanded&lt;&#x2F;strong&gt; but canonicalized body of &lt;code&gt;tikzpicture&lt;&#x2F;code&gt; is passed for MD5 digest, which is obviously identical to the previous overlay. The externalization process finds &lt;code&gt;test.md5&lt;&#x2F;code&gt; and deems that it is fine to just use that.&lt;&#x2F;li&gt;
+&lt;&#x2F;ol&gt;
+&lt;p&gt;The result is an unchanged figure despite a &lt;code&gt;\alt&lt;&#x2F;code&gt; command in it.&lt;&#x2F;p&gt;
+&lt;&#x2F;li&gt;
+&lt;li&gt;
+&lt;p&gt;Suppose in a 3-overlay frame the figure only changes in overlay 2, the externalization will still generate 3 figures instead of 2.&lt;&#x2F;p&gt;
+&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;h2 id=&quot;with-custom-filename&quot;&gt;With Custom Filename&lt;&#x2F;h2&gt;
+&lt;p&gt;Andrew Stacey addressed the first drawback in &lt;a rel=&quot;noopener nofollow noreferrer&quot; target=&quot;_blank&quot; href=&quot;https:&#x2F;&#x2F;tex.stackexchange.com&#x2F;a&#x2F;119440&#x2F;73509&quot;&gt;this question&lt;&#x2F;a&gt;. The idea is simply to attach the overlay number to the name when using &lt;code&gt;\tikzsetnextfilename&lt;&#x2F;code&gt;, so that figures in different overlays get different filenames. It is achieved by simply redefining &lt;code&gt;\tikzsetnextfilename&lt;&#x2F;code&gt; as:&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;ltx&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-ltx &quot;&gt;&lt;code class=&quot;language-ltx&quot; data-lang=&quot;ltx&quot;&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\let\orig@tikzsetnextfilename&lt;&#x2F;span&gt;&lt;span&gt;=&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\tikzsetnextfilename
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\renewcommand\tikzsetnextfilename&lt;&#x2F;span&gt;&lt;span&gt;[1]{&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\orig@tikzsetnextfilename&lt;&#x2F;span&gt;&lt;span&gt;{#1-&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\overlaynumber&lt;&#x2F;span&gt;&lt;span&gt;}}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;The second drawback is still present, and I came up with a partial solution for that.&lt;&#x2F;p&gt;
+&lt;h1 id=&quot;introducing-tikznamebeamer&quot;&gt;Introducing &lt;code&gt;\tikznamebeamer&lt;&#x2F;code&gt;&lt;&#x2F;h1&gt;
+&lt;p&gt;The idea is to have user to specify different groups of overlay numbers, and generate one figure per group. Here is the implementation:&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;ltx&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-ltx &quot;&gt;&lt;code class=&quot;language-ltx&quot; data-lang=&quot;ltx&quot;&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;\usepackage&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;etoolbox&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\makeatletter
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\newcounter&lt;&#x2F;span&gt;&lt;span&gt;{tikznamebeamer@tempcnt}&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;% counter variable to go through groups
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;\def&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\tikznamebeamer@finalidx&lt;&#x2F;span&gt;&lt;span&gt;{}&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;% will store the group index to use
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;\newcommand&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\tikznamebeamer&lt;&#x2F;span&gt;&lt;span&gt;}[2][figure]{&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\def\tikznamebeamer@slidesetidx&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\setcounter&lt;&#x2F;span&gt;&lt;span&gt;{tikznamebeamer@tempcnt}{0}&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;% reset counter
+&lt;&#x2F;span&gt;&lt;span&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\let\tikznamebeamer@finalidx&lt;&#x2F;span&gt;&lt;span&gt;=0&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;% default group being 0
+&lt;&#x2F;span&gt;&lt;span&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\renewcommand&lt;&#x2F;span&gt;&lt;span&gt;*{&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\do&lt;&#x2F;span&gt;&lt;span&gt;}[1]{&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;% loop
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\stepcounter&lt;&#x2F;span&gt;&lt;span&gt;{tikznamebeamer@tempcnt}&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;% counter++
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\let\tikznamebeamer@templist&lt;&#x2F;span&gt;&lt;span&gt;=&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\relax&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\forcsvlist&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\listadd\tikznamebeamer@templist&lt;&#x2F;span&gt;&lt;span&gt;}{####1}&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;% iterate through list of overlay numbers
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\xifinlist&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\number\beamer@slideinframe&lt;&#x2F;span&gt;&lt;span&gt;}{&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\tikznamebeamer@templist&lt;&#x2F;span&gt;&lt;span&gt;}{&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span&gt;                &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\edef\tikznamebeamer@finalidx&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\thetikznamebeamer@tempcnt&lt;&#x2F;span&gt;&lt;span&gt;}&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;% found, set group number
+&lt;&#x2F;span&gt;&lt;span&gt;            }{}&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span&gt;        }&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\docsvlist&lt;&#x2F;span&gt;&lt;span&gt;{#2}&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;% iterate through a list of lists of overlay numbers
+&lt;&#x2F;span&gt;&lt;span&gt;    }&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\tikznamebeamer@slidesetidx&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\tikzsetnextfilename&lt;&#x2F;span&gt;&lt;span&gt;{#1-&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\tikznamebeamer@finalidx&lt;&#x2F;span&gt;&lt;span&gt;}&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\makeatother
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;&lt;code&gt;\tikznamebeamer&lt;&#x2F;code&gt; accepts two arguments. The first argument is the desired filename. The second argument is a list of lists of numbers. For example, suppose the current frame has 5 overlays, &lt;code&gt;{{2, 5}, 4}&lt;&#x2F;code&gt; defines &lt;strong&gt;3&lt;&#x2F;strong&gt; groups (note that any overlay number of specified goes to group 0):&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;group 0 (default): 1, 3&lt;&#x2F;li&gt;
+&lt;li&gt;gruop 1: 2, 5&lt;&#x2F;li&gt;
+&lt;li&gt;group 2: 4&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;p&gt;Hence a call &lt;code&gt;\tikznamebeamer[my-graph]{{2, 5}, 4}&lt;&#x2F;code&gt; in this case will create 3 sets of files with name &lt;code&gt;my-graph-0&lt;&#x2F;code&gt;, &lt;code&gt;my-graph-1&lt;&#x2F;code&gt;, and &lt;code&gt;my-graph-2&lt;&#x2F;code&gt;. Overlay will use the correct set of files according to its group number.&lt;&#x2F;p&gt;
+&lt;p&gt;In this way, we can both specify a custom filename, and avoid unnecessary compilation at the same time.&lt;&#x2F;p&gt;
+&lt;h1 id=&quot;future-directions&quot;&gt;Future Directions&lt;&#x2F;h1&gt;
+&lt;p&gt;It is quite tedious to manually specify what overlay numbers have the same figure. Ideally the externalization should:&lt;&#x2F;p&gt;
+&lt;ol&gt;
+&lt;li&gt;Hash the canonicalized body of &lt;code&gt;tikzpicture&lt;&#x2F;code&gt; &lt;strong&gt;after expanding beamer related macros&lt;&#x2F;strong&gt;.&lt;&#x2F;li&gt;
+&lt;li&gt;Match the hash within the generated files to decide whether to create a new one or not.&lt;&#x2F;li&gt;
+&lt;&#x2F;ol&gt;
+&lt;p&gt;I haven&#x27;t figured out the expanding part yet. But here are some thoughts on the second part:&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;One simple idea is to append the hash to the end of the filename. Downside is that the figure could be frequently edited, and old files quickly bloat the build directory.&lt;&#x2F;li&gt;
+&lt;li&gt;Another more practical idea is to store a mapping between hash and filename in memory. This seems  much more complicated to implement though.&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;p&gt;Of course the elephant in the room is that the compilation is single-threaded, where the TikZ compilation chould&#x27;ve been done in parallel. There are some techniques involving using a custom build system for figures but that does not play too well on Overleaf.&lt;&#x2F;p&gt;
+</content>
+	</entry>
+</feed>

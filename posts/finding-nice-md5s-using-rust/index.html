@@ -1,0 +1,493 @@
+<!doctype html><html lang=en><head><meta charset=utf-8><meta content="width=device-width,initial-scale=1" name=viewport><meta content=#ffffff name=theme-color><meta content=#da532c name=msapplication-TileColor><link href=/icons/site.webmanifest rel=manifest><link color=#5bbad5 href=/icons/safari-pinned-tab.svg rel=mask-icon><link href=/icons/favicon-16x16.png rel=icon sizes=16x16 type=image/png><link href=/icons/favicon-32x32.png rel=icon sizes=32x32 type=image/png><link href=/icons/apple-touch-icon.png rel=apple-touch-icon sizes=180x180><link crossorigin=anonymous href=https://cdn.jsdelivr.net/gh/jpswalsh/academicons@1.9.1/css/academicons.min.css integrity=sha384-FIue+PI4SsI9XfHCz8dBLg33b0c1fMJgNU3X//L26FYbGnlSEfWmNT7zgWc2N9b6 rel=stylesheet><link integrity="sha256-AbA177XfpSnFEvgpYu1jMygiLabzPCJCRIBtR5jGc0k=" crossorigin=anonymous href=https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.2.0/css/all.min.css rel=stylesheet><link href=/deep-thought.css rel=stylesheet><title> Youmu | Finding Nice MD5s Using Rust </title><link crossorigin=anonymous href=https://cdn.jsdelivr.net/npm/katex@0.15.1/dist/katex.min.css integrity=sha384-R4558gYOUz8mP9YWpZJjofhk+zx0AS11p36HnD2ZKj/6JR5z27gSSULCNHIRReVs rel=stylesheet><script crossorigin=anonymous defer integrity=sha384-z1fJDqw8ZApjGO3/unPWUPsIymfsJmyrDVWC8Tv/a1HeOtGmkwNd/7xUS0Xcnvsx src=https://cdn.jsdelivr.net/npm/katex@0.15.1/dist/katex.min.js></script><script crossorigin=anonymous defer integrity=sha384-jiBVvJ8NGGj5n7kJaiWwWp9AjC+Yh8rhZY3GtAX8yU28azcLgoRo4oukO87g7zDT src=https://cdn.jsdelivr.net/npm/katex@0.15.1/dist/contrib/mathtex-script-type.min.js></script><script crossorigin=anonymous defer integrity=sha384-+XBljXPPiv+OzfbB3cVmLHf4hdUFHlWNZN5spNQ7rmHTXpd7WvJum6fIACpNNfIR src=https://cdn.jsdelivr.net/npm/katex@0.15.1/dist/contrib/auto-render.min.js></script><body class=has-background-white><nav aria-label="section navigation" class="navbar is-light" role=navigation><div class=container><div class=navbar-brand><a class="navbar-item is-size-5 has-text-weight-bold" href=/>Youmu</a><a class="navbar-burger burger" aria-expanded=false aria-label=menu data-target=navMenu role=button> <span aria-hidden=true></span> <span aria-hidden=true></span> <span aria-hidden=true></span> </a></div><div class=navbar-menu id=navMenu><div class="navbar-end has-text-centered"><a class="navbar-item has-text-weight-semibold" href=/> Home </a><a class="navbar-item has-text-weight-semibold" href=/posts> Posts </a><a class="navbar-item has-text-weight-semibold" href=/tags> Tags </a><a class="navbar-item has-text-weight-semibold" href=/categories> Categories </a><a class=navbar-item data-target=#search-modal id=nav-search title=Search> <span class=icon> <i class="fas fa-search"></i> </span> </a><a title="Switch to dark theme" class=navbar-item id=dark-mode> <span class=icon> <i class="fas fa-adjust"></i> </span> </a></div></div></div></nav><section class=section><div class=container><div class=columns><div class="column is-8 is-offset-2"><article class=box><h1 class=title>Finding Nice MD5s Using Rust</h1><p class=subtitle>A journey to try out Rust's SIMD and inline assembly<div class="columns is-multiline is-gapless"><div class="column is-8"><span class="icon-text has-text-grey"> <span class=icon> <i class="fas fa-user"></i> </span> <span>妖夢ちゃん published on</span> <span class=icon> <i class="far fa-calendar-alt"></i> </span> <span><time datetime=2022-01-12>January 12, 2022</time></span> </span></div><div class="column is-4 has-text-right-desktop"><span class="icon-text has-text-grey"> <span class=icon> <i class="far fa-clock"></i> </span> <span>27 min,</span> <span class=icon> <i class="fas fa-pencil-alt"></i> </span> <span>5251 words</span> </span></div><div class=column><p>Categories: <a class="has-text-info-dark has-text-weight-semibold" href=/categories/hobby/> <span class=icon-text> <span class=icon> <i class="fas fa-cube"></i> </span> <span>Hobby</span> </span> </a> <a class="has-text-info-dark has-text-weight-semibold" href=/categories/programming/> <span class=icon-text> <span class=icon> <i class="fas fa-cube"></i> </span> <span>Programming</span> </span> </a></div><div class="column has-text-right-desktop"><p>Tags: <a class="has-text-info-dark has-text-weight-semibold" href=/tags/rust/> <span class=icon-text> <span class=icon> <i class="fas fa-tag"></i> </span> <span>rust</span> </span> </a> <a class="has-text-info-dark has-text-weight-semibold" href=/tags/simd/> <span class=icon-text> <span class=icon> <i class="fas fa-tag"></i> </span> <span>simd</span> </span> </a></div></div><div class="content mt-2"><p>At the start of the week, a friend of mine sent me a <a rel="noopener nofollow noreferrer" href=https://crypto.stackexchange.com/questions/68674/md5-existence-of-invariant-fixed-point target=_blank>link</a>. "What an interesting yet pointless question!", both of us agreed. Later that day, <a rel="noopener nofollow noreferrer" href=https://github.com/zvibazak/Nice-MD5s target=_blank>another link</a> was also sent to me. Apparently there was someone who did care a little bit. Out of curiosity, I opened the <code>find_md5.py</code> file, and it hit me: "How can I optimize this task?" The task did shout SIMD to me, and I knew rust has <a rel="noopener nofollow noreferrer" href=https://doc.rust-lang.org/core/arch/index.html target=_blank><code>core::arch</code></a> which provides many SIMD intrinsics. Hence my journey to try out Rust's SIMD and inline assembly began.</p><span id=continue-reading></span><h1 id=introduction>Introduction</h1><p>By looking at <a rel="noopener nofollow noreferrer" href=https://github.com/zvibazak/Nice-MD5s#definitions target=_blank>zvibazak/Nice-MD5s</a>, I got a closer picture of the task on hand. More formally we want to deal with 3 tasks:<ol><li>Randomly generate a string with 32 characters, each from <code>[0-9a-z]</code>. There are some caveats on the so-called "Gold MD5", also known as the fixed point, but we will ignore that for now.<li>Compute the MD5 hash of the generate string.<li>Compute different metrics of the hash to determine how nice it is: <ol><li>The length of the longest consecutive digits as prefix<li>The length of the longest consecutive letters as prefix<li>The length of the longest consecutive homogeneous character as prefix<li>The length of the longest prefix matching $\pi$<li>The length of the longest prefix matching $e$</ol></ol><p>Following the chronological order of me writing the code, I will first talk about how to accomplish task 3, which I call "computing niceties". For the sake of brevity, I will assume we only care about the longest consecutive digits, and only gloss over other "niceties". I will then talk about generating strings, and finally the MD5 hash computation.<p>The complete codebase could be found at <a rel="noopener nofollow noreferrer" href=https://github.com/johnmave126/nice-md5s target=_blank>johnmave126/nice-md5s</a>. And for SIMD and inline assembly, we only consider <code>x86</code> and <code>x86_64</code> architecture.<h1 id=computing-niceties>Computing "Niceties"</h1><p>We are looking for a function like follows:<pre class=language-rust data-lang=rust style=background-color:#272822;color:#f8f8f2;><code class=language-rust data-lang=rust><span style=font-style:italic;color:#66d9ef;>fn </span><span style=color:#a6e22e;>count_leading_digits</span><span>(</span><span style=font-style:italic;color:#fd971f;>x</span><span>: [</span><span style=font-style:italic;color:#66d9ef;>u8</span><span>; 16]) -> </span><span style=font-style:italic;color:#66d9ef;>u8</span><span>;
+</span></code></pre><p>The input is a 16-byte array (MD5 produces 128 bits, aka 16 bytes), and the output is a number counting the number of digits from the beginning. To make sense of "a digit", we break a byte into 2 nibbles, and we call a nibble <code>n</code> "digit" if <code>0x0 <= n < 0xa</code>, and "letter" otherwise. Within each byte, we consider the most significant nibble comes before the least significant nibble.<h2 id=baseline>Baseline</h2><p>It is quite tempting to have a baseline algorithm as follows:<pre class=language-rust data-lang=rust style=background-color:#272822;color:#f8f8f2;><code class=language-rust data-lang=rust><span style=font-style:italic;color:#66d9ef;>fn </span><span style=color:#a6e22e;>count_leading_digits</span><span>(</span><span style=font-style:italic;color:#fd971f;>x</span><span>: [</span><span style=font-style:italic;color:#66d9ef;>u8</span><span>; 16]) -> </span><span style=font-style:italic;color:#66d9ef;>u8 </span><span>{
+</span><span>    x.</span><span style=color:#66d9ef;>into_iter</span><span>()
+</span><span>        .</span><span style=color:#66d9ef;>map</span><span>(|</span><span style=font-style:italic;color:#fd971f;>b</span><span>| [b </span><span style=color:#f92672;>>> </span><span style=color:#ae81ff;>4</span><span>, b </span><span style=color:#f92672;>& </span><span style=color:#ae81ff;>0x0F</span><span>])
+</span><span>        .</span><span style=color:#66d9ef;>flatten</span><span>()
+</span><span>        .</span><span style=color:#66d9ef;>take_while</span><span>(|</span><span style=color:#f92672;>&</span><span style=font-style:italic;color:#fd971f;>n</span><span>| n </span><span style=color:#f92672;>< </span><span style=color:#ae81ff;>0xA</span><span>)
+</span><span>        .</span><span style=color:#66d9ef;>count</span><span>() </span><span style=color:#f92672;>as </span><span style=font-style:italic;color:#66d9ef;>u8
+</span><span>}
+</span></code></pre><p>where we construct an iterator over the nibbles from the byte array and count. It turns out that, especially in the case where we want to compute multiple metrics, it is more performant to convert the byte array to a nibble array first.<pre class=language-rust data-lang=rust style=background-color:#272822;color:#f8f8f2;><code class=language-rust data-lang=rust><span style=font-style:italic;color:#66d9ef;>struct </span><span>Nibbles([</span><span style=font-style:italic;color:#66d9ef;>u8</span><span>; 32]);
+</span><span>
+</span><span style=font-style:italic;color:#66d9ef;>impl From</span><span><[</span><span style=font-style:italic;color:#66d9ef;>u8</span><span>; </span><span style=color:#ae81ff;>16</span><span>]> </span><span style=color:#f92672;>for </span><span>Nibbles {
+</span><span>    </span><span style=font-style:italic;color:#66d9ef;>fn </span><span style=color:#a6e22e;>from</span><span>(</span><span style=font-style:italic;color:#fd971f;>x</span><span>: [</span><span style=font-style:italic;color:#66d9ef;>u8</span><span>; 16]) -> </span><span style=font-style:italic;color:#66d9ef;>Self </span><span>{
+</span><span>        </span><span style=font-style:italic;color:#66d9ef;>let</span><span> nibbles </span><span style=color:#f92672;>=</span><span> x.</span><span style=color:#66d9ef;>map</span><span>(|</span><span style=font-style:italic;color:#fd971f;>b</span><span>| [b </span><span style=color:#f92672;>>> </span><span style=color:#ae81ff;>4</span><span>, b </span><span style=color:#f92672;>& </span><span style=color:#ae81ff;>0x0F</span><span>]);
+</span><span>        </span><span style=color:#75715e;>// SAFETY: size_of::<[[u8; 2]; 16]>() == size_of::<[u8; 32]>()
+</span><span>        </span><span style=font-style:italic;color:#66d9ef;>Self</span><span>(</span><span style=color:#f92672;>unsafe </span><span>{ </span><span style=color:#66d9ef;>transmute</span><span>(nibbles) })
+</span><span>    }
+</span><span>}
+</span><span>
+</span><span style=font-style:italic;color:#66d9ef;>fn </span><span style=color:#a6e22e;>count_leading_digits</span><span>(</span><span style=font-style:italic;color:#fd971f;>x</span><span>: [</span><span style=font-style:italic;color:#66d9ef;>u8</span><span>; 16]) -> </span><span style=font-style:italic;color:#66d9ef;>u8 </span><span>{
+</span><span>    </span><span style=color:#75715e;>// Here we convert `x` to `Nibbles`, while in practice we would convert
+</span><span>    </span><span style=color:#75715e;>// beforehand and reuse `Nibbles` to compute multiple metrics
+</span><span>    Nibbles::from(x).</span><span style=color:#ae81ff;>0.</span><span style=color:#66d9ef;>iter</span><span>().</span><span style=color:#66d9ef;>take_while</span><span>(|</span><span style=color:#f92672;>&</span><span style=font-style:italic;color:#fd971f;>n</span><span>| n </span><span style=color:#f92672;>< </span><span style=color:#ae81ff;>0xA</span><span>).</span><span style=color:#66d9ef;>count</span><span>() </span><span style=color:#f92672;>as </span><span style=font-style:italic;color:#66d9ef;>u8
+</span><span>}
+</span></code></pre><h2 id=simd>SIMD</h2><p>The first step is to load <code>[u8; 16]</code> into an SIMD register. We also want it to be in nibbles form for easier later processing. Conveniently <code>[u8; 32]</code> fits perfectly into a 256-bit SIMD vector, aka an <code>__m256i</code>.<p>I came up with two approaches to achieve this:<ul><li>Load <code>[u8; 16]</code> into an <code>__m128i</code>, convert each byte to a <code>u16</code> with zero extending to get an <code>__m256i</code>, and finally using bit shifting to adjust positions of the nibbles.<pre class=language-rust data-lang=rust style=background-color:#272822;color:#f8f8f2;><code class=language-rust data-lang=rust><span style=color:#f92672;>unsafe </span><span style=font-style:italic;color:#66d9ef;>fn </span><span style=color:#a6e22e;>load</span><span>(</span><span style=font-style:italic;color:#fd971f;>x</span><span>: [</span><span style=font-style:italic;color:#66d9ef;>u8</span><span>; 16]) -> __m256i {
+</span><span>    </span><span style=font-style:italic;color:#66d9ef;>let</span><span> x </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>_mm_loadu_si128</span><span>(x.</span><span style=color:#66d9ef;>as_ptr</span><span>().</span><span style=color:#66d9ef;>cast</span><span>());
+</span><span>    </span><span style=color:#75715e;>// Each byte now occupies 2 bytes
+</span><span>    </span><span style=font-style:italic;color:#66d9ef;>let</span><span> x </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>_mm256_cvtepu8_epi16</span><span>(x);
+</span><span>    </span><span style=color:#75715e;>// Shift left to place lo-nibble in hi-byte and clear excess nibbles
+</span><span>    </span><span style=font-style:italic;color:#66d9ef;>let</span><span> lo_nibble </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>_mm256_and_si256</span><span>(</span><span style=color:#66d9ef;>_mm256_slli_epi16</span><span>(x, </span><span style=color:#ae81ff;>8</span><span>), </span><span style=color:#66d9ef;>_mm256_set1_epi8</span><span>(</span><span style=color:#ae81ff;>0x0F</span><span style=font-style:italic;color:#66d9ef;>u8 </span><span style=color:#f92672;>as </span><span style=font-style:italic;color:#66d9ef;>i8</span><span>));
+</span><span>    </span><span style=color:#75715e;>// Shift right to place hi-nibble in lo-byte
+</span><span>    </span><span style=font-style:italic;color:#66d9ef;>let</span><span> hi_nibble </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>_mm256_srli_epi16</span><span>(x, </span><span style=color:#ae81ff;>4</span><span>);
+</span><span>
+</span><span>    </span><span style=color:#66d9ef;>_mm256_or_si256</span><span>(hi_nibble, lo_nibble)
+</span><span>}
+</span></code></pre><li>Load <code>[u8; 16]</code> into an <code>__m128i</code>, use bit shifting to move hi-nibbles, interleave the bytes and then assemble the <code>__m256i</code>.<pre class=language-rust data-lang=rust style=background-color:#272822;color:#f8f8f2;><code class=language-rust data-lang=rust><span style=color:#f92672;>unsafe </span><span style=font-style:italic;color:#66d9ef;>fn </span><span style=color:#a6e22e;>load</span><span>(</span><span style=font-style:italic;color:#fd971f;>x</span><span>: [</span><span style=font-style:italic;color:#66d9ef;>u8</span><span>; 16]) -> __m256i {
+</span><span>    </span><span style=font-style:italic;color:#66d9ef;>let</span><span> x </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>_mm_loadu_si128</span><span>(x.</span><span style=color:#66d9ef;>as_ptr</span><span>().</span><span style=color:#66d9ef;>cast</span><span>());
+</span><span>    </span><span style=color:#75715e;>// Shift hi nibbles of each byte into lo nibbles
+</span><span>    </span><span style=color:#75715e;>// Hi-nibbles of each byte will contain some garbage now
+</span><span>    </span><span style=color:#75715e;>// Note: there is no `_mm_srli_epi8`
+</span><span>    </span><span style=font-style:italic;color:#66d9ef;>let</span><span> hi_nibble </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>_mm_srli_si128</span><span>(x, </span><span style=color:#ae81ff;>4</span><span>);
+</span><span>    </span><span style=color:#75715e;>// Interleave
+</span><span>    </span><span style=color:#75715e;>// Hi-nibbles of each byte will contain some garbage
+</span><span>    </span><span style=font-style:italic;color:#66d9ef;>let</span><span> lo_128 </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>_mm_unpacklo_epi8</span><span>(hi_nibble, x);
+</span><span>    </span><span style=font-style:italic;color:#66d9ef;>let</span><span> hi_128 </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>_mm_unpackhi_epi8</span><span>(hi_nibble, x);
+</span><span>    </span><span style=color:#75715e;>// Assemble `__m256i`
+</span><span>    </span><span style=font-style:italic;color:#66d9ef;>let</span><span> x </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>_mm256_set_m128i</span><span>(hi_128, lo_128);
+</span><span>    </span><span style=color:#75715e;>// Apply mask to clear hi-nibble of each byte
+</span><span>    </span><span style=color:#66d9ef;>_mm256_and_si256</span><span>(x, </span><span style=color:#66d9ef;>_mm256_set1_epi8</span><span>(</span><span style=color:#ae81ff;>0x0F</span><span style=font-style:italic;color:#66d9ef;>u8 </span><span style=color:#f92672;>as </span><span style=font-style:italic;color:#66d9ef;>i8</span><span>))
+</span><span>}
+</span></code></pre></ul><p>Quick benchmark showed that the two approaches had very similar performance, so I went with the first one.<p>Next, we want to determine whether each nibble is a digit or a letter. This is quite straightforward.<pre class=language-rust data-lang=rust style=background-color:#272822;color:#f8f8f2;><code class=language-rust data-lang=rust><span style=font-style:italic;color:#66d9ef;>let</span><span> x </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>load</span><span>(x);
+</span><span style=font-style:italic;color:#66d9ef;>let</span><span> mask </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>_mm256_cmpgt_epi8</span><span>(</span><span style=color:#66d9ef;>_mm256_set1_epi8</span><span>(</span><span style=color:#ae81ff;>0x0A</span><span style=font-style:italic;color:#66d9ef;>u8 </span><span style=color:#f92672;>as </span><span style=font-style:italic;color:#66d9ef;>i8</span><span>), x);
+</span></code></pre><p>For each byte in <code>mask</code>, the byte is <code>0xFF</code> if the corresponding byte in <code>x</code> is smaller than <code>0x0A</code>, and <code>0x00</code> otherwise. In other words, if the nibble is a digit, the byte becomes <code>0xFF</code>. Otherwise, the nibble is a letter, and the byte becomes <code>0x00</code>.<p>For other metrics, this kind of mask is also easy to compute.<ul><li>For longest prefix matching $\pi$/$e$, we can use <code>_mm256_cmpeq_epi8</code>:<pre class=language-rust data-lang=rust style=background-color:#272822;color:#f8f8f2;><code class=language-rust data-lang=rust><span style=font-style:italic;color:#66d9ef;>let</span><span> x </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>load</span><span>(x);
+</span><span style=font-style:italic;color:#66d9ef;>const </span><span style=color:#ae81ff;>PI</span><span>: [</span><span style=font-style:italic;color:#66d9ef;>u8</span><span>; </span><span style=color:#ae81ff;>32</span><span>] </span><span style=color:#f92672;>= </span><span>[</span><span style=color:#ae81ff;>3</span><span>, </span><span style=color:#ae81ff;>1</span><span>, </span><span style=color:#ae81ff;>4</span><span>, </span><span style=color:#ae81ff;>1</span><span>, </span><span style=color:#ae81ff;>5</span><span>, </span><span style=color:#ae81ff;>9</span><span>, </span><span style=color:#75715e;>/* the rest omitted */</span><span>];
+</span><span style=font-style:italic;color:#66d9ef;>let</span><span> mask </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>_mm256_cmpeq_epi8</span><span>(x, </span><span style=color:#66d9ef;>_mm256_loadu_si256</span><span>(</span><span style=color:#ae81ff;>PI</span><span>.</span><span style=color:#66d9ef;>as_ptr</span><span>().</span><span style=color:#66d9ef;>cast</span><span>()));
+</span></code></pre><li>For homogeneous prefix, we can make an vector where each byte is the least significant byte of the original vector:<pre class=language-rust data-lang=rust style=background-color:#272822;color:#f8f8f2;><code class=language-rust data-lang=rust><span style=font-style:italic;color:#66d9ef;>let</span><span> x </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>load</span><span>(x);
+</span><span style=color:#75715e;>// Duplicate the least significant 64-bit to all 64-bit lanes.
+</span><span style=color:#75715e;>// The main motivation is to copy the least significant byte to 64-th position.
+</span><span style=font-style:italic;color:#66d9ef;>let</span><span> b </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>_mm256_permute4x64_epi64</span><span>(x, </span><span style=color:#ae81ff;>0</span><span>);
+</span><span style=color:#75715e;>// Within 128-bit (16-byte) lane, set all byte to be the least significant one.
+</span><span style=font-style:italic;color:#66d9ef;>let</span><span> b </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>_mm256_shuffle_epi8</span><span>(b, </span><span style=color:#66d9ef;>_mm256_setzero_si256</span><span>());
+</span><span style=font-style:italic;color:#66d9ef;>let</span><span> mask </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>_mm256_cmpeq_epi8</span><span>(x, b);
+</span></code></pre></ul><p>Now that we have the mask, it is a classical technique to use <code>movemask</code> to collect the mask:<pre class=language-rust data-lang=rust style=background-color:#272822;color:#f8f8f2;><code class=language-rust data-lang=rust><span style=font-style:italic;color:#66d9ef;>let</span><span> packed_mask </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>_mm256_movemask_epi8</span><span>(mask) </span><span style=color:#f92672;>as </span><span style=font-style:italic;color:#66d9ef;>u32</span><span>;
+</span></code></pre><p>The $i$-th bit of <code>packed_mask</code> is 1 if and only if the $i$-th byte of <code>mask</code> is <code>0xFF</code>. So our answer is the number of consecutive 1's in <code>packed_mask</code>. Conveniently, there is a intrinsic to count the number of consecutive <strong>0's</strong> in a number:<pre class=language-rust data-lang=rust style=background-color:#272822;color:#f8f8f2;><code class=language-rust data-lang=rust><span style=color:#75715e;>// Need to invert the bits first
+</span><span style=font-style:italic;color:#66d9ef;>let</span><span> answer </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>_tzcnt_u32</span><span>(</span><span style=color:#f92672;>!</span><span>packed_mask) </span><span style=color:#f92672;>as </span><span style=font-style:italic;color:#66d9ef;>u8</span><span>;
+</span></code></pre><p>And we arrive at a SIMD solution, which requires AVX, AVX2, SSE2, and BMI1 extension on a x86/x86_64 processor.<h2 id=a-failed-simd-approach>A Failed SIMD Approach</h2><p>At this point I had another idea: nice MD5s should not be common. Maybe I could use SIMD to quickly rule out MD5s that are not very nice, and only run the SIMD algorithm on potentially nice one.<p>If we take look at 2 bytes, which are 4 nibbles, we have:<ul><li>The probability that they are all digits is $(10/16)^4\approx 15.3\%$.<li>The probability that they are all letters is $(6/16)^4\approx 1.98\%$.<li>The probability that they are all the same is $(1/16)^3\approx 0.024\%$.<li>The probability that they match $\pi$/$e$ is $(1/16)^4\approx 0.0015\%$.</ul><p>So, my idea was: apart from the initial screening, no additional runtime would be incurred with high probability.<p>Consider 4 nibbles occupying 4 bytes, we can fit 8 instances in an <code>__m256i</code> and process them simultaneously.<p>To load the first 4 nibbles of each of <code>[[u8; 16]; 8]</code>, we can simply generate an array containing the first 2 bytes of each array, and use the load method above.<pre class=language-rust data-lang=rust style=background-color:#272822;color:#f8f8f2;><code class=language-rust data-lang=rust><span style=color:#75715e;>// x is `[[u8; 16]; 8]`
+</span><span style=font-style:italic;color:#66d9ef;>let</span><span> first_2_bytes </span><span style=color:#f92672;>=</span><span> x.</span><span style=color:#66d9ef;>map</span><span>(|</span><span style=font-style:italic;color:#fd971f;>v</span><span>| [v[</span><span style=color:#ae81ff;>0</span><span>], v[</span><span style=color:#ae81ff;>1</span><span>]]);
+</span><span style=font-style:italic;color:#66d9ef;>let</span><span> first_2_bytes </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>load</span><span>(</span><span style=color:#f92672;>unsafe </span><span>{ </span><span style=color:#66d9ef;>transmute</span><span>(first_2_bytes) });
+</span></code></pre><p>We are filtering hashes that are not very nice, so I deem that the first 4 nibbles of a hash have to be all nice before we further investigate it. We can apply a similar strategy as above, but with 32-bit lanes.<pre class=language-rust data-lang=rust style=background-color:#272822;color:#f8f8f2;><code class=language-rust data-lang=rust><span style=font-style:italic;color:#66d9ef;>let</span><span> byte_mask </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>_mm256_cmpgt_epi8</span><span>(</span><span style=color:#66d9ef;>_mm256_set1_epi8</span><span>(</span><span style=color:#ae81ff;>0x0A</span><span style=font-style:italic;color:#66d9ef;>u8 </span><span style=color:#f92672;>as </span><span style=font-style:italic;color:#66d9ef;>i8</span><span>), first_2_bytes);
+</span><span style=color:#75715e;>// If any of the bits in a 32-bit lane is not 1, set all 32 bits to 0
+</span><span style=font-style:italic;color:#66d9ef;>let</span><span> mask </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>_mm256_cmpeq_epi8</span><span>(first_2_bytes, </span><span style=color:#66d9ef;>_mm256_set1_epi8</span><span>(</span><span style=color:#ae81ff;>0xFF</span><span style=font-style:italic;color:#66d9ef;>u8 </span><span style=color:#f92672;>as </span><span style=font-style:italic;color:#66d9ef;>i8</span><span>));
+</span><span style=color:#75715e;>// movemask for each 32-bit lane, 8 lanes total
+</span><span style=font-style:italic;color:#66d9ef;>let</span><span> packed_mask </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>_mm256_movemask_ps</span><span>(</span><span style=color:#66d9ef;>_mm256_cvtepi32_ps</span><span>(mask)) </span><span style=color:#f92672;>as </span><span style=font-style:italic;color:#66d9ef;>u8</span><span>;
+</span></code></pre><p>There are only $2^8=256$ different <code>packed_mask</code>, so we build a look up table such that each <code>packed_mask</code> is mapped to a <code>u32</code> where indices of 1's in <code>packed_mask</code> are packed together. For example, if <code>packed_mask=0b0110_1110</code>, where bit-index <code>1, 2, 3, 5, 6</code> are 1's, we map to a <code>u32</code> of <code>0x00076432</code>. Observe that we use 1-indexing in <code>u32</code>, so that we can easily detect whether there are more by a zero-test.<p>Given the packed indices, we can initialize the answers to 0, and only compute hashes that has potential.<pre class=language-rust data-lang=rust style=background-color:#272822;color:#f8f8f2;><code class=language-rust data-lang=rust><span style=color:#75715e;>// `indices` stores the packed indices
+</span><span style=font-style:italic;color:#66d9ef;>let</span><span> answers </span><span style=color:#f92672;>= </span><span>[</span><span style=color:#ae81ff;>0</span><span>; </span><span style=color:#ae81ff;>8</span><span>];
+</span><span style=color:#f92672;>while</span><span> indices </span><span style=color:#f92672;>!= </span><span style=color:#ae81ff;>0 </span><span>{
+</span><span>    </span><span style=font-style:italic;color:#66d9ef;>let</span><span> idx </span><span style=color:#f92672;>= </span><span>(indices </span><span style=color:#f92672;>& </span><span style=color:#ae81ff;>0xF</span><span>) </span><span style=color:#f92672;>as </span><span style=font-style:italic;color:#66d9ef;>usize </span><span style=color:#f92672;>- </span><span style=color:#ae81ff;>1</span><span>;
+</span><span>    </span><span style=color:#75715e;>// Use SIMD algorithm to compute the actual number
+</span><span>    answers[idx] </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>count_leading_digits_simd</span><span>(x[idx]);
+</span><span>    indices </span><span style=color:#f92672;>>>= </span><span style=color:#ae81ff;>4</span><span>;
+</span><span>}
+</span></code></pre><p>The algorithm will report 0 if the number is less than 4, as opposed to the accurate number from the algorithms above.<p>When computing multiple metrics, to avoid loading an array multiple times, a small optimization would be to <code>OR</code> all the masks together and only generate <code>__m256i</code> for the corresponding arrays.<pre class=language-rust data-lang=rust style=background-color:#272822;color:#f8f8f2;><code class=language-rust data-lang=rust><span style=color:#75715e;>// We have multiple masks from different metrics
+</span><span style=font-style:italic;color:#66d9ef;>let</span><span> mask </span><span style=color:#f92672;>=</span><span> mask_1 </span><span style=color:#f92672;>|</span><span> mask_2 </span><span style=color:#f92672;>|</span><span> mask_3;
+</span><span style=color:#75715e;>// SAFETY: MaybeUninit is always initialized
+</span><span style=font-style:italic;color:#66d9ef;>let </span><span style=color:#f92672;>mut</span><span> simds: [MaybeUninit<__m256i>; </span><span style=color:#ae81ff;>8</span><span>] </span><span style=color:#f92672;>= unsafe </span><span>{ MaybeUninit::uninit().</span><span style=color:#66d9ef;>assume_init</span><span>() };
+</span><span style=color:#f92672;>while</span><span> indices </span><span style=color:#f92672;>!= </span><span style=color:#ae81ff;>0 </span><span>{
+</span><span>    </span><span style=font-style:italic;color:#66d9ef;>let</span><span> idx </span><span style=color:#f92672;>= </span><span>(indices </span><span style=color:#f92672;>& </span><span style=color:#ae81ff;>0xF</span><span>) </span><span style=color:#f92672;>as </span><span style=font-style:italic;color:#66d9ef;>usize </span><span style=color:#f92672;>- </span><span style=color:#ae81ff;>1</span><span>;
+</span><span>    simds[idx].</span><span style=color:#66d9ef;>write</span><span>(</span><span style=color:#66d9ef;>load</span><span>(x[idx]));
+</span><span>    indices </span><span style=color:#f92672;>>>= </span><span style=color:#ae81ff;>4</span><span>;
+</span><span>}
+</span></code></pre><p>It turns out that, although the performance of this approach is better than baseline, it is still much slower than the previous SIMD algorithm. So, I call this a failed attempt.<h2 id=performance-comparison>Performance Comparison</h2><h3 id=benchmark-system>Benchmark System</h3><table><thead><tr><th>Component<th>Detail<tbody><tr><td>CPU<td>Intel Core i7-6700K<tr><td>RAM<td>32GB DDR4 2400MHz<tr><td>OS<td>5.15.0.56-ubuntu-22.04.1-lts<tr><td>Rust<td>1.66.0<tr><td>RUSTFLAGS<td><code>-C target-cpu=native</code></table><h3 id=best-case-throughput>Best Case Throughput</h3><ul><li><p>Computing all the metrics</p> <table><thead><tr><th>Method<th>Block Size<sup class=footnote-reference><a href=#block_size>1</a></sup><th>Throughput<tbody><tr><td>Baseline<td>16<td>43.980 Melem/s<tr><td>SIMD<td>2<td><strong>280.26 Melem/s</strong><tr><td>Failed SIMD<td>8<td>147.88 Melem/s</table><li><p>Computing number of consecutive digits as prefix</p> <table><thead><tr><th>Method<th>Block Size<sup class=footnote-reference><a href=#block_size>1</a></sup><th>Throughput<tbody><tr><td>Baseline<td>1<td>85.079 Melem/s<tr><td>SIMD<td>4<td><strong>860.68 Melem/s</strong><tr><td>Failed SIMD<td>8<td>181.60 Melem/s</table><li><p>Computing number nibbles equal to $\pi$ as prefix</p> <table><thead><tr><th>Method<th>Block Size<sup class=footnote-reference><a href=#block_size>1</a></sup><th>Throughput<tbody><tr><td>Baseline<td>1<td>368.23 Melem/s<tr><td>SIMD<td>4<td><strong>780.78 Melem/s</strong><tr><td>Failed SIMD<td>8<td>517.12 Melem/s</table><li><p>... other metrics results omitted ...</p></ul><div class=footnote-definition id=block_size><sup class=footnote-definition-label>1</sup><p>The number of inputs to process in a single invocation. For baseline and SIMD, it is simply a <code>for</code>-loop.</div><h1 id=random-string-generation>Random String Generation</h1><p>It might be statistically the same to iterate the input space sequentially, but it is definitely less fun. So, I went with generating random inputs. Obviously we don't need a cryptographic secure random string generation. My requirements are simple:<ul><li>String has length 32 and each character is from <code>[0-9a-z]</code>.<li>Each valid string has a non-zero probability to appear.</ul><p>Mainly the input space is so large that I don't really care about the quality of the randomness. We will use <a rel="noopener nofollow noreferrer" href=https://docs.rs/rand/0.8.5/rand/rngs/struct.SmallRng.html target=_blank><code>SmallRng</code></a> from <a rel="noopener nofollow noreferrer" href=https://crates.io/crates/rand target=_blank><code>rand</code></a> crate for the source of randomness.<h2 id=baseline-1>Baseline</h2><p>I simply compute a random byte modulo 36, and map that to <code>[0-9a-z]</code> to generate a random character:<pre class=language-rust data-lang=rust style=background-color:#272822;color:#f8f8f2;><code class=language-rust data-lang=rust><span style=color:#75715e;>// `POOL` is a map from `0-35` to `[0-9a-z]`
+</span><span style=font-style:italic;color:#66d9ef;>const </span><span style=color:#ae81ff;>POOL</span><span>: [</span><span style=font-style:italic;color:#66d9ef;>u8</span><span>; </span><span style=color:#ae81ff;>36</span><span>] </span><span style=color:#f92672;>= </span><span>[ </span><span style=color:#75715e;>/* omitted */ </span><span>];
+</span><span style=font-style:italic;color:#66d9ef;>let</span><span> v: [</span><span style=font-style:italic;color:#66d9ef;>u8</span><span>; </span><span style=color:#ae81ff;>32</span><span>] </span><span style=color:#f92672;>= unsafe </span><span>{
+</span><span>   </span><span style=color:#66d9ef;>transmute</span><span>([
+</span><span>       rng.</span><span style=color:#66d9ef;>next_u64</span><span>(),
+</span><span>       rng.</span><span style=color:#66d9ef;>next_u64</span><span>(),
+</span><span>       rng.</span><span style=color:#66d9ef;>next_u64</span><span>(),
+</span><span>       rng.</span><span style=color:#66d9ef;>next_u64</span><span>(),
+</span><span>   ])
+</span><span>};
+</span><span style=font-style:italic;color:#66d9ef;>let</span><span> my_random_string </span><span style=color:#f92672;>=</span><span> v.</span><span style=color:#66d9ef;>map</span><span>(|</span><span style=font-style:italic;color:#fd971f;>b</span><span>| </span><span style=color:#ae81ff;>POOL</span><span>[(b </span><span style=color:#f92672;>% </span><span style=color:#ae81ff;>36</span><span>) </span><span style=color:#f92672;>as </span><span style=font-style:italic;color:#66d9ef;>usize</span><span>]);
+</span></code></pre><h2 id=simd-1>SIMD</h2><p><code>[u8; 32]</code> fits perfectly into a <code>__m256i</code>, so it is natural to try SIMD. Given a random byte, I really want to use <code>_mm256_rem_epu8</code> to have the same behavior as the baseline algorithm. Unfortunately, that is part of SVML and not a part of Rust intrinsics. Hence I resorts to the following:<ul><li>Take 6 bits from a random byte (0-63).<li>Subtract 36 if the byte is greater than or equal to 36.<li>Adjust the byte to <code>[0-9a-z]</code>.</ul><p>This way we make sure that every character has non-zero probability to appear. And the randomness is not too skewed.<pre class=language-rust data-lang=rust style=background-color:#272822;color:#f8f8f2;><code class=language-rust data-lang=rust><span style=color:#75715e;>// Load 128 random bits
+</span><span style=font-style:italic;color:#66d9ef;>let</span><span> v </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>_mm256_loadu_si256</span><span>(
+</span><span>    [
+</span><span>        rng.</span><span style=color:#66d9ef;>next_u64</span><span>(),
+</span><span>        rng.</span><span style=color:#66d9ef;>next_u64</span><span>(),
+</span><span>        rng.</span><span style=color:#66d9ef;>next_u64</span><span>(),
+</span><span>        rng.</span><span style=color:#66d9ef;>next_u64</span><span>(),
+</span><span>    ]
+</span><span>    .</span><span style=color:#66d9ef;>as_ptr</span><span>()
+</span><span>    .</span><span style=color:#66d9ef;>cast</span><span>(),
+</span><span>);
+</span><span style=color:#75715e;>// Keep 6 bits (0-63)
+</span><span style=font-style:italic;color:#66d9ef;>let</span><span> v </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>_mm256_and_si256</span><span>(v, </span><span style=color:#66d9ef;>_mm256_set1_epi8</span><span>(</span><span style=color:#ae81ff;>0x3F</span><span style=font-style:italic;color:#66d9ef;>u8 </span><span style=color:#f92672;>as </span><span style=font-style:italic;color:#66d9ef;>i8</span><span>));
+</span><span style=color:#75715e;>// Mask bytes in range 36-63
+</span><span style=font-style:italic;color:#66d9ef;>let</span><span> gt_35 </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>_mm256_cmpgt_epi8</span><span>(v, </span><span style=color:#66d9ef;>_mm256_set1_epi8</span><span>(</span><span style=color:#ae81ff;>35</span><span>));
+</span><span style=color:#75715e;>// Subtract 36 for those bytes
+</span><span style=font-style:italic;color:#66d9ef;>let</span><span> v </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>_mm256_sub_epi8</span><span>(v, </span><span style=color:#66d9ef;>_mm256_and_si256</span><span>(</span><span style=color:#66d9ef;>_mm256_set1_epi8</span><span>(</span><span style=color:#ae81ff;>36</span><span>), gt_35));
+</span><span style=color:#75715e;>// Set each byte to 0xFF if it should be a letter (10-35), otherwise 0x00
+</span><span style=font-style:italic;color:#66d9ef;>let</span><span> alpha_mask </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>_mm256_cmpgt_epi8</span><span>(v, </span><span style=color:#66d9ef;>_mm256_set1_epi8</span><span>(</span><span style=color:#ae81ff;>0x09</span><span style=font-style:italic;color:#66d9ef;>u8 </span><span style=color:#f92672;>as </span><span style=font-style:italic;color:#66d9ef;>i8</span><span>));
+</span><span style=color:#75715e;>// Shift each byte so that range starts at ASCII `0`
+</span><span style=font-style:italic;color:#66d9ef;>let</span><span> to_numbers </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>_mm256_add_epi8</span><span>(v, </span><span style=color:#66d9ef;>_mm256_set1_epi8</span><span>(</span><span style=color:#ae81ff;>0x30</span><span style=font-style:italic;color:#66d9ef;>u8 </span><span style=color:#f92672;>as </span><span style=font-style:italic;color:#66d9ef;>i8</span><span>));
+</span><span style=color:#75715e;>// Shift bytes that should be a letter by additional 0x27, so that the range
+</span><span style=color:#75715e;>// starts at ASCII `a`
+</span><span style=font-style:italic;color:#66d9ef;>let</span><span> to_alphas </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>_mm256_and_si256</span><span>(</span><span style=color:#66d9ef;>_mm256_set1_epi8</span><span>(</span><span style=color:#ae81ff;>0x27</span><span style=font-style:italic;color:#66d9ef;>u8 </span><span style=color:#f92672;>as </span><span style=font-style:italic;color:#66d9ef;>i8</span><span>), alpha_mask);
+</span><span style=color:#75715e;>// Add shifting together to get correct bytes
+</span><span style=font-style:italic;color:#66d9ef;>let</span><span> v </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>_mm256_add_epi8</span><span>(to_numbers, to_alphas);
+</span><span>
+</span><span style=font-style:italic;color:#66d9ef;>let </span><span style=color:#f92672;>mut</span><span> my_random_string </span><span style=color:#f92672;>= </span><span>[</span><span style=color:#ae81ff;>0</span><span>; </span><span style=color:#ae81ff;>32</span><span>];
+</span><span style=color:#66d9ef;>_mm256_storeu_si256</span><span>(my_random_string.</span><span style=color:#66d9ef;>as_mut_ptr</span><span>().</span><span style=color:#66d9ef;>cast</span><span>(), v);
+</span></code></pre><h2 id=performance-comparison-1>Performance Comparison</h2><table><thead><tr><th>Method<th>Block Size<th>Throughput<tbody><tr><td>Baseline<td>16<td>25.383 Melem/s<tr><td>SIMD<td>32<td><strong>107.15 Melem/s</strong></table><p>Looking through benchmark results for each method, the performance generally improves as the block size increases.<h1 id=md5-hash>MD5 Hash</h1><p>After I implemented computing all the metrics and generating random strings, I ran some preliminary benchmarks, which showed that computing MD5 hashes was indeed the bottleneck. When I first started the project, I didn't really want to implement MD5 myself. But at that point, it seems inevitable for me to at least investigate.<h2 id=baseline-2>Baseline</h2><p>We establish baseline using <a rel="noopener nofollow noreferrer" href=https://crates.io/crates/md-5 target=_blank><code>md-5</code></a> provided by <a rel="noopener nofollow noreferrer" href=https://github.com/RustCrypto target=_blank><code>RustCrypto</code></a>.<pre class=language-rust data-lang=rust style=background-color:#272822;color:#f8f8f2;><code class=language-rust data-lang=rust><span style=color:#f92672;>use </span><span>md5::{Digest, Md5};
+</span><span>
+</span><span style=color:#f92672;>pub </span><span style=font-style:italic;color:#66d9ef;>fn </span><span style=color:#a6e22e;>digest_md5</span><span>(</span><span style=font-style:italic;color:#fd971f;>buf</span><span>: [</span><span style=font-style:italic;color:#66d9ef;>u8</span><span>; 32]) -> [</span><span style=font-style:italic;color:#66d9ef;>u8</span><span>; </span><span style=color:#ae81ff;>16</span><span>] {
+</span><span>    Md5::digest(buf.</span><span style=color:#66d9ef;>as_slice</span><span>()).</span><span style=color:#66d9ef;>into</span><span>())
+</span><span>}
+</span></code></pre><h2 id=inline-assembly>Inline Assembly</h2><p><code>md-5</code> does have a feature <a rel="noopener nofollow noreferrer" href=https://docs.rs/crate/md-5/0.10.5/features target=_blank><code>asm</code></a> that uses an assembly implementation from <a rel="noopener nofollow noreferrer" href=https://www.nayuki.io/page/fast-md5-hash-implementation-in-x86-assembly target=_blank>Project Nayuki</a>. However according to <a rel="noopener nofollow noreferrer" href=https://github.com/RustCrypto/asm-hashes/issues/17 target=_blank>this issue</a>, the implementation does not work on <code>x86_64-pc-windows-msvc</code> target due to mismatching calling conventions. Unfortunately, that is the target of my developing machine, so I think it is a good time I start to investigate the inline assembly of Rust.<h3 id=basics-of-rust-inline-assembly>Basics of Rust Inline Assembly</h3><p>For what we concerned, Rust's inline assembly is a macro call with 2 parts: instructions and register specifications (I omit various configuration options here). Instructions is basically a string template, with each instruction separated by <code>\n</code>. A little quality of life feature by <code>asm!()</code> is that programmer can also write multiple strings separated by comma, and the macro will automatically concatenate them by <code>\n</code>. The second part is a list of registers the assembly requires. Programmers are able to specify specific registers to use, or have the compiler automatically allocate registers with constraints. Programmers also need to specify whether each register is an input, an output, or some other combinations, and the compiler will generate glue code between assembly code and Rust code.<p>A quick example from <a rel="noopener nofollow noreferrer" href=https://doc.rust-lang.org/rust-by-example/unsafe/asm.html target=_blank>Rust By Example</a>:<pre class=language-rust data-lang=rust style=background-color:#272822;color:#f8f8f2;><code class=language-rust data-lang=rust><span>asm!(
+</span><span>    </span><span style=color:#e6db74;>"mov {0}, {1}"</span><span>,
+</span><span>    </span><span style=color:#e6db74;>"add {0}, 5"</span><span>,
+</span><span>    </span><span style=color:#66d9ef;>out</span><span>(reg) o,
+</span><span>    </span><span style=color:#f92672;>in</span><span>(reg) i,
+</span><span>);
+</span></code></pre><p>We can see this works very much like <code>format!()</code> with a little bit more custom syntax.<h3 id=basics-of-md5>Basics of MD5</h3><p>The MD5 algorithm takes data in chunks of 512 bit, with the last chunk padded. For each chunk, the data is regarded as 16 32-bit integers in little endian. And the algorithm maintains 4 32-bit integers as state. The algorithm has 4 rounds, using 4 operators known as <code>f</code>, <code>g</code>, <code>h</code>, and <code>i</code>. In each round, every input integer gets to mix with the state integers in different orders.<p>For example, <code>f</code> operator looks like follows:<pre class=language-rust data-lang=rust style=background-color:#272822;color:#f8f8f2;><code class=language-rust data-lang=rust><span style=font-style:italic;color:#66d9ef;>fn </span><span style=color:#a6e22e;>operator_f</span><span>(</span><span style=font-style:italic;color:#fd971f;>a</span><span>: </span><span style=font-style:italic;color:#66d9ef;>u32</span><span>, </span><span style=font-style:italic;color:#fd971f;>b</span><span>: </span><span style=font-style:italic;color:#66d9ef;>u32</span><span>, </span><span style=font-style:italic;color:#fd971f;>c</span><span>: </span><span style=font-style:italic;color:#66d9ef;>u32</span><span>, </span><span style=font-style:italic;color:#fd971f;>d</span><span>: </span><span style=font-style:italic;color:#66d9ef;>u32</span><span>, </span><span style=font-style:italic;color:#fd971f;>t</span><span>: </span><span style=font-style:italic;color:#66d9ef;>u32</span><span>, </span><span style=font-style:italic;color:#fd971f;>s</span><span>: </span><span style=font-style:italic;color:#66d9ef;>u32</span><span>, </span><span style=font-style:italic;color:#fd971f;>k</span><span>: </span><span style=font-style:italic;color:#66d9ef;>u32</span><span>) -> </span><span style=font-style:italic;color:#66d9ef;>u32 </span><span>{
+</span><span>    (((c </span><span style=color:#f92672;>^</span><span> d) </span><span style=color:#f92672;>&</span><span> b) </span><span style=color:#f92672;>^</span><span> d).</span><span style=color:#66d9ef;>wrapping_add</span><span>(a)
+</span><span>        .</span><span style=color:#66d9ef;>wrapping_add</span><span>(k)
+</span><span>        .</span><span style=color:#66d9ef;>wrapping_add</span><span>(t)
+</span><span>        .</span><span style=color:#66d9ef;>rotate_left</span><span>(s)
+</span><span>        .</span><span style=color:#66d9ef;>wrapping_add</span><span>(b)
+</span><span>}
+</span></code></pre><p>And a sneak peek of the first round looks like follows:<pre class=language-rust data-lang=rust style=background-color:#272822;color:#f8f8f2;><code class=language-rust data-lang=rust><span style=color:#75715e;>// `a`, `b`, `c`, `d` are 4 state integers, and `data` is the input
+</span><span>a </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>operator_f</span><span>(a, b, c, d, data[</span><span style=color:#ae81ff;>0</span><span>], </span><span style=color:#ae81ff;>7</span><span>, </span><span style=color:#ae81ff;>0xd76aa478</span><span>);
+</span><span>b </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>operator_f</span><span>(d, a, b, c, data[</span><span style=color:#ae81ff;>1</span><span>], </span><span style=color:#ae81ff;>12</span><span>, </span><span style=color:#ae81ff;>0xe8c7b756</span><span>);
+</span><span>c </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>operator_f</span><span>(c, d, b, a, data[</span><span style=color:#ae81ff;>2</span><span>], </span><span style=color:#ae81ff;>17</span><span>, </span><span style=color:#ae81ff;>0x242070db</span><span>);
+</span><span>d </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>operator_f</span><span>(b, c, d, a, data[</span><span style=color:#ae81ff;>3</span><span>], </span><span style=color:#ae81ff;>22</span><span>, </span><span style=color:#ae81ff;>0xc1bdceee</span><span>);
+</span><span>
+</span><span style=color:#75715e;>/* ... Omitted 12 more invocations in the first round ... */
+</span></code></pre><p>For a complete explanation of MD5, read <a rel="noopener nofollow noreferrer" href=https://www.comparitech.com/blog/information-security/md5-algorithm-with-examples/ target=_blank><em>The MD5 algorithm (with examples)</em></a>.<h3 id=implement-md5-for-x86-64>Implement MD5 for x86-64</h3><p>We can do one small optimization for our case. We know our input is always 32 bytes, so the padding of the data is fixed:<table><thead><tr><th>Position<th>Content<tbody><tr><td><code>data[0..8]</code><td>Input data<tr><td><code>data[8]</code><td><code>0x80</code><tr><td><code>data[14]</code><td><code>0x100</code><tr><td><code>data[9..14]</code> and <code>data[15]</code><td>All 0</table><p>So, for data known to be 0, we can shave 1 <code>add</code> instruction from the operator.<p>On x86-64, we have lots of registers available, so we can load all 4 state integers, all 8 input integers into registers, with 2 more registers used for temporaries.<p>We need to perform the same operators on different registers inputs many times, so we need something like a function, but not involving the calling overhead. In other words, we want a macro.<p>In <code>asm!()</code>, apart from using positional substitution, we can also name the registers like in <code>format!()</code>. And our inline assembly would look like:<pre class=language-rust data-lang=rust style=background-color:#272822;color:#f8f8f2;><code class=language-rust data-lang=rust><span>asm!(
+</span><span>    </span><span style=color:#75715e;>/* inline assemblies */
+</span><span>
+</span><span>    </span><span style=color:#75715e;>// state integers
+</span><span>    a </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>inout</span><span>(reg) state[</span><span style=color:#ae81ff;>0</span><span>],
+</span><span>    b </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>inout</span><span>(reg) state[</span><span style=color:#ae81ff;>1</span><span>],
+</span><span>    c </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>inout</span><span>(reg) state[</span><span style=color:#ae81ff;>2</span><span>],
+</span><span>    d </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>inout</span><span>(reg) state[</span><span style=color:#ae81ff;>3</span><span>],
+</span><span>    </span><span style=color:#75715e;>// input integers
+</span><span>    x0 </span><span style=color:#f92672;>= in</span><span>(reg) data[</span><span style=color:#ae81ff;>0</span><span>],
+</span><span>    x1 </span><span style=color:#f92672;>= in</span><span>(reg) data[</span><span style=color:#ae81ff;>1</span><span>],
+</span><span>    </span><span style=color:#75715e;>/* x2-x15 omitted */
+</span><span>    </span><span style=color:#75715e;>// clobbered temporaries
+</span><span>    tmp0 </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>out</span><span>(reg) </span><span style=color:#f92672;>_</span><span>,
+</span><span>    tmp1 </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>out</span><span>(reg) </span><span style=color:#f92672;>_</span><span>,
+</span><span>);
+</span></code></pre><p>So the macro needs to take <code>ident</code> of the register, and generates appropriate string. One thing we need to be careful is that since we operates on 32-bit integers, all registers have to appear like <code>{reg_name:e}</code> in the template string. Let's see a first attempt to write <code>operator_f</code>.<pre class=language-rust data-lang=rust style=background-color:#272822;color:#f8f8f2;><code class=language-rust data-lang=rust><span>#[cfg_attr(rustfmt, rustfmt_skip)]
+</span><span style=color:#66d9ef;>macro_rules! </span><span>op_f {
+</span><span>    ($a: ident, $b: ident, $c: ident, $d: ident, $t: ident, $s: literal, $k: literal) </span><span style=color:#f92672;>=> </span><span>{
+</span><span>        concat!(
+</span><span>            </span><span style=color:#e6db74;>"mov {tmp0:e}, {"</span><span>, stringify!($c), </span><span style=color:#e6db74;>":e}</span><span style=color:#ae81ff;>\n</span><span style=color:#e6db74;>"</span><span>,
+</span><span>            </span><span style=color:#e6db74;>"add {"</span><span>, stringify!($a), </span><span style=color:#e6db74;>":e}, {"</span><span>, stringify!($t), </span><span style=color:#e6db74;>":e}</span><span style=color:#ae81ff;>\n</span><span style=color:#e6db74;>"</span><span>,
+</span><span>            </span><span style=color:#e6db74;>"xor {tmp0:e}, {"</span><span>, stringify!($d), </span><span style=color:#e6db74;>":e}</span><span style=color:#ae81ff;>\n</span><span style=color:#e6db74;>"</span><span>,
+</span><span>            </span><span style=color:#e6db74;>"and {tmp0:e}, {"</span><span>, stringify!($b), </span><span style=color:#e6db74;>":e}</span><span style=color:#ae81ff;>\n</span><span style=color:#e6db74;>"</span><span>,
+</span><span>            </span><span style=color:#e6db74;>"xor {tmp0:e}, {"</span><span>, stringify!($d), </span><span style=color:#e6db74;>":e}</span><span style=color:#ae81ff;>\n</span><span style=color:#e6db74;>"</span><span>,
+</span><span>            </span><span style=color:#e6db74;>"lea {"</span><span>, stringify!($a), </span><span style=color:#e6db74;>":e}, [{tmp0:e} + {"</span><span>, stringify!($a) ,</span><span style=color:#e6db74;>":e} + "</span><span>, $k ,</span><span style=color:#e6db74;>"]</span><span style=color:#ae81ff;>\n</span><span style=color:#e6db74;>"</span><span>,
+</span><span>            </span><span style=color:#e6db74;>"rol {"</span><span>, stringify!($a), </span><span style=color:#e6db74;>":e}, "</span><span>, $s, </span><span style=color:#e6db74;>"</span><span style=color:#ae81ff;>\n</span><span style=color:#e6db74;>"</span><span>,
+</span><span>            </span><span style=color:#e6db74;>"add {"</span><span>, stringify!($a), </span><span style=color:#e6db74;>":e}, {"</span><span>, stringify!($b), </span><span style=color:#e6db74;>":e}</span><span style=color:#ae81ff;>\n</span><span style=color:#e6db74;>"</span><span>,
+</span><span>        )
+</span><span>    };
+</span><span>}
+</span></code></pre><p>This already looks awful and close to unreadable. It is also really error-prone to write this. Note I put <code>#[cfg_attr(rustfmt, rustfmt_skip)]</code> at the top?, this is how it looks if I don't do that:<details><summary>Truly incomprehensible after formatting</summary> <pre class=language-rust data-lang=rust style=background-color:#272822;color:#f8f8f2;><code class=language-rust data-lang=rust><span style=color:#66d9ef;>macro_rules! </span><span>op_f {
+</span><span>    ($a: ident, $b: ident, $c: ident, $d: ident, $t: ident, $s: literal, $k: literal) </span><span style=color:#f92672;>=> </span><span>{
+</span><span>        concat!(
+</span><span>            </span><span style=color:#e6db74;>"mov {tmp0:e}, {"</span><span>,
+</span><span>            stringify!($c),
+</span><span>            </span><span style=color:#e6db74;>":e}</span><span style=color:#ae81ff;>\n</span><span style=color:#e6db74;>"</span><span>,
+</span><span>            </span><span style=color:#e6db74;>"add {"</span><span>,
+</span><span>            stringify!($a),
+</span><span>            </span><span style=color:#e6db74;>":e}, {"</span><span>,
+</span><span>            stringify!($t),
+</span><span>            </span><span style=color:#e6db74;>":e}</span><span style=color:#ae81ff;>\n</span><span style=color:#e6db74;>"</span><span>,
+</span><span>            </span><span style=color:#e6db74;>"xor {tmp0:e}, {"</span><span>,
+</span><span>            stringify!($d),
+</span><span>            </span><span style=color:#e6db74;>":e}</span><span style=color:#ae81ff;>\n</span><span style=color:#e6db74;>"</span><span>,
+</span><span>            </span><span style=color:#e6db74;>"and {tmp0:e}, {"</span><span>,
+</span><span>            stringify!($b),
+</span><span>            </span><span style=color:#e6db74;>":e}</span><span style=color:#ae81ff;>\n</span><span style=color:#e6db74;>"</span><span>,
+</span><span>            </span><span style=color:#e6db74;>"xor {tmp0:e}, {"</span><span>,
+</span><span>            stringify!($d),
+</span><span>            </span><span style=color:#e6db74;>":e}</span><span style=color:#ae81ff;>\n</span><span style=color:#e6db74;>"</span><span>,
+</span><span>            </span><span style=color:#e6db74;>"lea {"</span><span>,
+</span><span>            stringify!($a),
+</span><span>            </span><span style=color:#e6db74;>":e}, [{tmp0:e} + {"</span><span>,
+</span><span>            stringify!($a),
+</span><span>            </span><span style=color:#e6db74;>":e} + "</span><span>,
+</span><span>            $k,
+</span><span>            </span><span style=color:#e6db74;>"]</span><span style=color:#ae81ff;>\n</span><span style=color:#e6db74;>"</span><span>,
+</span><span>            </span><span style=color:#e6db74;>"rol {"</span><span>,
+</span><span>            stringify!($a),
+</span><span>            </span><span style=color:#e6db74;>":e}, "</span><span>,
+</span><span>            $s,
+</span><span>            </span><span style=color:#e6db74;>"</span><span style=color:#ae81ff;>\n</span><span style=color:#e6db74;>"</span><span>,
+</span><span>            </span><span style=color:#e6db74;>"add {"</span><span>,
+</span><span>            stringify!($a),
+</span><span>            </span><span style=color:#e6db74;>":e}, {"</span><span>,
+</span><span>            stringify!($b),
+</span><span>            </span><span style=color:#e6db74;>":e}</span><span style=color:#ae81ff;>\n</span><span style=color:#e6db74;>"</span><span>,
+</span><span>        )
+</span><span>    };
+</span><span>}
+</span></code></pre></details><hr><p>So we need an instruction level abstraction to make it much easier to read:<pre class=language-rust data-lang=rust style=background-color:#272822;color:#f8f8f2;><code class=language-rust data-lang=rust><span style=color:#75715e;>// stringify an operand
+</span><span>#[cfg_attr(rustfmt, rustfmt_skip)]
+</span><span style=color:#66d9ef;>macro_rules! </span><span>asm_operand {
+</span><span>    (eax) </span><span style=color:#f92672;>=> </span><span>{ </span><span style=color:#e6db74;>"eax" </span><span>};
+</span><span>    (ebx) </span><span style=color:#f92672;>=> </span><span>{ </span><span style=color:#e6db74;>"ebx" </span><span>};
+</span><span>    </span><span style=color:#75715e;>/* ... omitted transcribing all the register names ... */
+</span><span>
+</span><span>    ($x: ident) </span><span style=color:#f92672;>=> </span><span>{
+</span><span>        concat!(</span><span style=color:#e6db74;>"{"</span><span>, stringify!($x), </span><span style=color:#e6db74;>":e}"</span><span>)
+</span><span>    };
+</span><span>    ($x: literal) </span><span style=color:#f92672;>=> </span><span>{
+</span><span>        stringify!($x)
+</span><span>    };
+</span><span>    ([ $first: tt </span><span style=color:#f92672;>$</span><span>(+ $rest: tt)</span><span style=color:#f92672;>*</span><span> ]) </span><span style=color:#f92672;>=> </span><span>{
+</span><span>        concat!(</span><span style=color:#e6db74;>"["</span><span>, asm_operand!($first) </span><span style=color:#f92672;>$</span><span>(, </span><span style=color:#e6db74;>"+"</span><span>, asm_operand!($rest))</span><span style=color:#f92672;>* </span><span>,</span><span style=color:#e6db74;>"]"</span><span>)
+</span><span>    };
+</span><span>}
+</span><span>
+</span><span style=color:#75715e;>// stringify a block of instructions
+</span><span>#[cfg_attr(rustfmt, rustfmt_skip)]
+</span><span style=color:#66d9ef;>macro_rules! </span><span>asm_block {
+</span><span>    </span><span style=color:#75715e;>// Instructions separated by semicolon
+</span><span>    </span><span style=color:#75715e;>// Each instruction is an operator followed by one or more operands
+</span><span>    </span><span style=color:#75715e;>// NOTE: does not handle 0 argument operator, labels, etc.
+</span><span>    (</span><span style=color:#f92672;>$</span><span>($op: ident $a0: tt $(, $args: tt)</span><span style=color:#f92672;>*</span><span>);+ $(;)?) => {
+</span><span>        concat!(
+</span><span>            </span><span style=color:#f92672;>$</span><span>(
+</span><span>                stringify!($op), " ",
+</span><span>                asm_operand!($a0) $(, ", ", asm_operand!($args))*,
+</span><span>                "\n"
+</span><span>            ),+
+</span><span>        )
+</span><span>    };
+</span><span>}
+</span></code></pre><p>Now we can rewrite our <code>op_f</code> to:<pre class=language-rust data-lang=rust style=background-color:#272822;color:#f8f8f2;><code class=language-rust data-lang=rust><span>#[cfg_attr(rustfmt, rustfmt_skip)]
+</span><span style=color:#66d9ef;>macro_rules! </span><span>op_f {
+</span><span>    ($a: ident, $b: ident, $c: ident, $d: ident, $t: tt, $s: literal, $k: literal) </span><span style=color:#f92672;>=> </span><span>{
+</span><span>        asm_block!(
+</span><span>            mov tmp0, $c;
+</span><span>            add $a, $t;
+</span><span>            xor tmp0, $d;
+</span><span>            and tmp0, $b;
+</span><span>            xor tmp0, $d;
+</span><span>            lea $a, [$a </span><span style=color:#f92672;>+</span><span> tmp0 </span><span style=color:#f92672;>+ </span><span>$k];
+</span><span>            rol $a, $s;
+</span><span>            add $a, $b;
+</span><span>        )
+</span><span>    };
+</span><span>}
+</span></code></pre><p>This looks much more readable, and closer to actual assembly. Note that we change <code>$t: ident</code> to <code>$t: tt</code>, for later use in x86 version. As a matter of fact, we have a tiny "type system" here to enforce the input type of the macro:<ul><li><code>ident</code> means a register,<li><code>literal</code> means an immediate,<li><code>tt</code> means anything: a register, an immediate, or a memory address <code>[reg1 + reg2 + imm]</code>.</ul><p>We can easily invoke <code>op_f</code> by:<pre class=language-rust data-lang=rust style=background-color:#272822;color:#f8f8f2;><code class=language-rust data-lang=rust><span>asm!(
+</span><span>    op_f!(a, b, c, d, x0, </span><span style=color:#ae81ff;>7</span><span>,  </span><span style=color:#ae81ff;>0xd76aa478</span><span>),
+</span><span>    op_f!(d, a, b, c, x1, </span><span style=color:#ae81ff;>12</span><span>, </span><span style=color:#ae81ff;>0xe8c7b756</span><span>),
+</span><span>    op_f!(c, d, b, a, x2, </span><span style=color:#ae81ff;>17</span><span>, </span><span style=color:#ae81ff;>0x242070db</span><span>),
+</span><span>    op_f!(b, c, d, a, x3, </span><span style=color:#ae81ff;>22</span><span>, </span><span style=color:#ae81ff;>0xc1bdceee</span><span>),
+</span><span>    </span><span style=color:#75715e;>/* ... omitted the rest of MD5 algorithm ... */
+</span><span>
+</span><span>    </span><span style=color:#75715e;>// state integers
+</span><span>    a </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>inout</span><span>(reg) state[</span><span style=color:#ae81ff;>0</span><span>],
+</span><span>    b </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>inout</span><span>(reg) state[</span><span style=color:#ae81ff;>1</span><span>],
+</span><span>    c </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>inout</span><span>(reg) state[</span><span style=color:#ae81ff;>2</span><span>],
+</span><span>    d </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>inout</span><span>(reg) state[</span><span style=color:#ae81ff;>3</span><span>],
+</span><span>    </span><span style=color:#75715e;>// input integers
+</span><span>    x0 </span><span style=color:#f92672;>= in</span><span>(reg) data[</span><span style=color:#ae81ff;>0</span><span>],
+</span><span>    x1 </span><span style=color:#f92672;>= in</span><span>(reg) data[</span><span style=color:#ae81ff;>1</span><span>],
+</span><span>    </span><span style=color:#75715e;>/* x2-x7 omitted */
+</span><span>    </span><span style=color:#75715e;>// clobbered temporaries
+</span><span>    tmp0 </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>out</span><span>(reg) </span><span style=color:#f92672;>_</span><span>,
+</span><span>    tmp1 </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>out</span><span>(reg) </span><span style=color:#f92672;>_</span><span>,
+</span><span>);
+</span></code></pre><p>And it becomes straightforward to implement MD5 and apply our little optimizations.<h3 id=implement-md5-for-x86>Implement MD5 for x86</h3><p>In an ideal world, I could use the exact same assembly as in x86-64 and call it a day. Unfortunately, we need 14 general registers for our <code>asm!()</code> call. However, on x86, we only have 7 general registers. One idea is to keep input on stack and use a register to store the address of it. This reduces the number of registers needed to 7. However, <a rel="noopener nofollow noreferrer" href=https://github.com/rust-lang/rust/issues/106781 target=_blank>the code is not guaranteed to compile</a>. We need to manually specify each register to use, save and restore those registers to utilize them.<pre class=language-rust data-lang=rust style=background-color:#272822;color:#f8f8f2;><code class=language-rust data-lang=rust><span>asm!(
+</span><span>    </span><span style=color:#75715e;>// Save esi and ebp
+</span><span>    </span><span style=color:#e6db74;>"sub esp, 8"</span><span>,
+</span><span>    </span><span style=color:#e6db74;>"mov [esp], esi"</span><span>,
+</span><span>    </span><span style=color:#e6db74;>"mov [esp + 4], ebp"</span><span>,
+</span><span>
+</span><span>    </span><span style=color:#75715e;>// Move address of data to ebp
+</span><span>    </span><span style=color:#e6db74;>"mov ebp, edi"</span><span>,
+</span><span>
+</span><span>    </span><span style=color:#75715e;>// op_f needs to be changed to use esi and edi as temp register
+</span><span>    op_f!(eax, ebx, ecx, edx, [ebp], </span><span style=color:#ae81ff;>7</span><span>,  </span><span style=color:#ae81ff;>0xd76aa478</span><span>),
+</span><span>    op_f!(edx, eax, ebx, ecx, [ebp </span><span style=color:#f92672;>+ </span><span style=color:#ae81ff;>4</span><span>], </span><span style=color:#ae81ff;>12</span><span>, </span><span style=color:#ae81ff;>0xe8c7b756</span><span>),
+</span><span>    op_f!(ecx, edx, ebx, eax, [ebp </span><span style=color:#f92672;>+ </span><span style=color:#ae81ff;>8</span><span>], </span><span style=color:#ae81ff;>17</span><span>, </span><span style=color:#ae81ff;>0x242070db</span><span>),
+</span><span>    op_f!(ebx, ecx, edx, eax, [ebp </span><span style=color:#f92672;>+ </span><span style=color:#ae81ff;>12</span><span>], </span><span style=color:#ae81ff;>22</span><span>, </span><span style=color:#ae81ff;>0xc1bdceee</span><span>),
+</span><span>    </span><span style=color:#75715e;>/* ... omitted the rest of MD5 algorithm ... */
+</span><span>
+</span><span>    </span><span style=color:#75715e;>// Restore esi and ebp
+</span><span>    </span><span style=color:#e6db74;>"mov esi, [esp]"</span><span>,
+</span><span>    </span><span style=color:#e6db74;>"mov ebp, [esp + 4]"</span><span>,
+</span><span>    </span><span style=color:#e6db74;>"add esp, 8"</span><span>,
+</span><span>
+</span><span>    </span><span style=color:#75715e;>// state integers
+</span><span>    </span><span style=color:#66d9ef;>inout</span><span>(</span><span style=color:#e6db74;>"eax"</span><span>) state[</span><span style=color:#ae81ff;>0</span><span>],
+</span><span>    </span><span style=color:#66d9ef;>inout</span><span>(</span><span style=color:#e6db74;>"ebx"</span><span>) state[</span><span style=color:#ae81ff;>1</span><span>],
+</span><span>    </span><span style=color:#66d9ef;>inout</span><span>(</span><span style=color:#e6db74;>"ecx"</span><span>) state[</span><span style=color:#ae81ff;>2</span><span>],
+</span><span>    </span><span style=color:#66d9ef;>inout</span><span>(</span><span style=color:#e6db74;>"edx"</span><span>) state[</span><span style=color:#ae81ff;>3</span><span>],
+</span><span>    </span><span style=color:#75715e;>// input integers
+</span><span>    </span><span style=color:#f92672;>in</span><span>(</span><span style=color:#e6db74;>"edi"</span><span>) data.</span><span style=color:#66d9ef;>as_ptr</span><span>(),
+</span><span>    </span><span style=color:#75715e;>// clobbered temporaries
+</span><span>    </span><span style=color:#66d9ef;>lateout</span><span>(</span><span style=color:#e6db74;>"edi"</span><span>) </span><span style=color:#f92672;>_</span><span>,
+</span><span>);
+</span></code></pre><h2 id=simd-2>SIMD</h2><p>There is no way to apply SIMD to generate one MD5 hash. But we can fit 8 32-bit integers into a <code>__m256i</code>, so it is natural to compute 8 MD5 hashes simultaneously using SIMD.<p>The biggest roadblock is the lack of <code>rol</code> in SIMD intrinsics. But no big deal, <code>rol</code> is just 2 bit shiftings followed by an or. One might try this:<pre class=language-rust data-lang=rust style=background-color:#272822;color:#f8f8f2;><code class=language-rust data-lang=rust><span style=color:#f92672;>unsafe </span><span style=font-style:italic;color:#66d9ef;>fn </span><span style=color:#a6e22e;>rotate_left</span><span>(</span><span style=font-style:italic;color:#fd971f;>x</span><span>: __m256i, </span><span style=font-style:italic;color:#fd971f;>by</span><span>: </span><span style=font-style:italic;color:#66d9ef;>i32</span><span>) -> __m256i {
+</span><span>    </span><span style=font-style:italic;color:#66d9ef;>let</span><span> hi </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>_mm256_slli_epi32</span><span>(x, by);
+</span><span>    </span><span style=font-style:italic;color:#66d9ef;>let</span><span> lo </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>_mm256_srli_epi32</span><span>(x, </span><span style=color:#ae81ff;>32 </span><span style=color:#f92672;>-</span><span> by);
+</span><span>    </span><span style=color:#66d9ef;>_mm256_or_si256</span><span>(hi, lo)
+</span><span>}
+</span></code></pre><p>Well this does not work, if we look closer at the signature of <a rel="noopener nofollow noreferrer" href=https://doc.rust-lang.org/stable/core/arch/x86_64/fn._mm256_slli_epi32.html target=_blank><code>_mm256_slli_epi32</code></a> we shall see<pre class=language-rust data-lang=rust style=background-color:#272822;color:#f8f8f2;><code class=language-rust data-lang=rust><span style=color:#f92672;>pub unsafe </span><span style=font-style:italic;color:#66d9ef;>fn </span><span style=color:#a6e22e;>_mm256_slli_epi32</span><span>(</span><span style=font-style:italic;color:#fd971f;>a</span><span>: __m256i, </span><span style=color:#f92672;>const </span><span style=font-style:italic;color:#fd971f;>IMM8</span><span>: </span><span style=font-style:italic;color:#66d9ef;>i32</span><span>) -> __m256i;
+</span><span>                                            </span><span style=color:#f92672;>^^^^^
+</span></code></pre><p><code>IMM8</code> must be a constant, although the documentation is using the legacy const generics syntax, which makes it really hard to spot. One might go ahead and write:<pre class=language-rust data-lang=rust style=background-color:#272822;color:#f8f8f2;><code class=language-rust data-lang=rust><span style=color:#f92672;>unsafe </span><span style=font-style:italic;color:#66d9ef;>fn </span><span style=color:#a6e22e;>rotate_left</span><span><</span><span style=color:#f92672;>const</span><span> BY: </span><span style=font-style:italic;color:#66d9ef;>i32</span><span>>(</span><span style=font-style:italic;color:#fd971f;>x</span><span>: __m256i) -> __m256i {
+</span><span>    </span><span style=font-style:italic;color:#66d9ef;>let</span><span> hi </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>_mm256_slli_epi32</span><span>(x, </span><span style=color:#ae81ff;>BY</span><span>);
+</span><span>    </span><span style=font-style:italic;color:#66d9ef;>let</span><span> lo </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>_mm256_srli_epi32</span><span>(x, </span><span style=color:#ae81ff;>32 </span><span style=color:#f92672;>- </span><span style=color:#ae81ff;>BY</span><span>);
+</span><span>    </span><span style=color:#66d9ef;>_mm256_or_si256</span><span>(hi, lo)
+</span><span>}
+</span></code></pre><p>Not really working, because we only have <code>min_const_generics</code>, which means <code>32 - BY</code> is not considered a constant that can be used for the purpose of const generics. I had to settle with this:<pre class=language-rust data-lang=rust style=background-color:#272822;color:#f8f8f2;><code class=language-rust data-lang=rust><span style=color:#f92672;>unsafe </span><span style=font-style:italic;color:#66d9ef;>fn </span><span style=color:#a6e22e;>rotate_left</span><span><</span><span style=color:#f92672;>const</span><span> L: </span><span style=font-style:italic;color:#66d9ef;>i32</span><span>, </span><span style=color:#f92672;>const</span><span> R: </span><span style=font-style:italic;color:#66d9ef;>i32</span><span>>(</span><span style=font-style:italic;color:#fd971f;>x</span><span>: __m256i) -> __m256i {
+</span><span>    debug_assert_eq!(L </span><span style=color:#f92672;>+</span><span> R, </span><span style=color:#ae81ff;>32</span><span>);
+</span><span>    </span><span style=font-style:italic;color:#66d9ef;>let</span><span> hi </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>_mm256_slli_epi32</span><span>(x, L);
+</span><span>    </span><span style=font-style:italic;color:#66d9ef;>let</span><span> lo </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>_mm256_srli_epi32</span><span>(x, R);
+</span><span>    </span><span style=color:#66d9ef;>_mm256_or_si256</span><span>(hi, lo)
+</span><span>}
+</span></code></pre><p>Not the best solution, but it works. Implementation for the MD5 rounds is easy:<pre class=language-rust data-lang=rust style=background-color:#272822;color:#f8f8f2;><code class=language-rust data-lang=rust><span style=color:#f92672;>unsafe </span><span style=font-style:italic;color:#66d9ef;>fn </span><span style=color:#a6e22e;>op_f</span><span><</span><span style=color:#f92672;>const</span><span> L: </span><span style=font-style:italic;color:#66d9ef;>i32</span><span>, </span><span style=color:#f92672;>const</span><span> R: </span><span style=font-style:italic;color:#66d9ef;>i32</span><span>>(
+</span><span>    </span><span style=color:#f92672;>mut </span><span style=font-style:italic;color:#fd971f;>a</span><span>: __m256i,
+</span><span>    </span><span style=font-style:italic;color:#fd971f;>b</span><span>: __m256i,
+</span><span>    </span><span style=font-style:italic;color:#fd971f;>c</span><span>: __m256i,
+</span><span>    </span><span style=font-style:italic;color:#fd971f;>d</span><span>: __m256i,
+</span><span>    </span><span style=font-style:italic;color:#fd971f;>t</span><span>: __m256i,
+</span><span>    </span><span style=font-style:italic;color:#fd971f;>k</span><span>: </span><span style=font-style:italic;color:#66d9ef;>u32</span><span>,
+</span><span>) -> __m256i {
+</span><span>    </span><span style=font-style:italic;color:#66d9ef;>let</span><span> k </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>_mm256_set1_epi32</span><span>(k </span><span style=color:#f92672;>as </span><span style=font-style:italic;color:#66d9ef;>i32</span><span>);
+</span><span>    </span><span style=font-style:italic;color:#66d9ef;>let </span><span style=color:#f92672;>mut</span><span> tmp </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>_mm256_xor_si256</span><span>(c, d);
+</span><span>    a </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>_mm256_add_epi32</span><span>(a, t);
+</span><span>    tmp </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>_mm256_and_si256</span><span>(tmp, b);
+</span><span>    tmp </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>_mm256_xor_si256</span><span>(tmp, d);
+</span><span>    a </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>_mm256_add_epi32</span><span>(a, k);
+</span><span>    a </span><span style=color:#f92672;>= </span><span style=color:#66d9ef;>_mm256_add_epi32</span><span>(a, tmp);
+</span><span>    a </span><span style=color:#f92672;>= </span><span>rotate_left::&LTL, R>(a);
+</span><span>    </span><span style=color:#66d9ef;>_mm256_add_epi32</span><span>(a, b)
+</span><span>}
+</span></code></pre><p>And the invocations look like:<pre class=language-rust data-lang=rust style=background-color:#272822;color:#f8f8f2;><code class=language-rust data-lang=rust><span>a </span><span style=color:#f92672;>= </span><span>op_f::&LT7, 25>(a, b, c, d, x0, </span><span style=color:#ae81ff;>0xd76aa478</span><span>);
+</span><span>d </span><span style=color:#f92672;>= </span><span>op_f::&LT12, 20>(d, a, b, c, x1, </span><span style=color:#ae81ff;>0xe8c7b756</span><span>);
+</span><span>c </span><span style=color:#f92672;>= </span><span>op_f::&LT17, 15>(c, d, a, b, x2, </span><span style=color:#ae81ff;>0x242070db</span><span>);
+</span><span>b </span><span style=color:#f92672;>= </span><span>op_f::&LT22, 10>(b, c, d, a, x3, </span><span style=color:#ae81ff;>0xc1bdceee</span><span>);
+</span></code></pre><h2 id=performance-comparison-2>Performance Comparison</h2><table><thead><tr><th>Method<th>Block Size<th>Throughput<tbody><tr><td>Baseline<td>32<td>8.5480 Melem/s<tr><td>Assembly<td>8<td>10.229 Melem/s<tr><td>SIMD<td>8<td><strong>59.416 Melem/s</strong></table><p>The assembly version does not have much of a performance gain over baseline, which is in line with the observation by Project Nayuki. The SIMD version gives us quite some performance boost.<h1 id=putting-it-together>Putting It Together</h1><p>I quickly put everything together:<ul><li>$n$ (default to be the value of <a rel="noopener nofollow noreferrer" href=https://doc.rust-lang.org/stable/std/thread/fn.available_parallelism.html target=_blank><code>available_parallelism()</code></a>) threads to generate random strings, compute their MD5s, and compute metrics. Each thread maintains the thread-local best for each metric and passes that to the main thread every 1024 (a hand-wavy constant I chose) strings generated.<li>One thread to update the terminal UI.<li>Main thread maintains the global best and notifies the UI thread for updates.</ul><p>For the terminal UI, I wanted a live update UI like <code>vnstat -l</code> or <code>wget</code>. Unfortunately, <code>tui</code> only supports full-screen app. My workaround was to use <a rel="noopener nofollow noreferrer" href=https://crates.io/crates/indicatif target=_blank><code>indicatif</code></a>, and customize the appearance of the progress bars to make it look like a live update.<p>On my developing machine (AMD Ryzen 5900X), when running 24 workers, I can get about 0.5B strings generated and tested per second.<p><img alt=Screenshot src=/images/posts/finding-nice-md5s-using-rust/bin-screenshot.png><h1 id=thoughts>Thoughts</h1><p>Overall, this is quite a nice little pet project to get me familiar with SIMD and inline assembly in Rust, arguably one of the <code>unsafe</code>st part of Rust. The result performance is within my expectation. I do have some thoughts on what can be improved to smooth out the developing experience:<ul><li><p>Supporting SIMD on both <code>x86</code> and <code>x86-64</code> is a pain. Every import turns into two, and rust-analyzer won't automatically add a new import into the other one. It could easily become</p> <pre class=language-rust data-lang=rust style=background-color:#272822;color:#f8f8f2;><code class=language-rust data-lang=rust><span>#[cfg(target_arch </span><span style=color:#f92672;>= </span><span style=color:#e6db74;>"x86"</span><span>)]
+</span><span style=color:#f92672;>use </span><span>std::arch::x86::{
+</span><span>    __m256i, _mm256_add_epi32, _mm256_and_si256, _mm256_loadu_si256, _mm256_or_si256,
+</span><span>    _mm256_set1_epi32, _mm256_set1_epi8, _mm256_slli_epi32, _mm256_srli_epi32,
+</span><span>    _mm256_storeu_si256, _mm256_xor_si256,
+</span><span>};
+</span><span>#[cfg(target_arch </span><span style=color:#f92672;>= </span><span style=color:#e6db74;>"x86_64"</span><span>)]
+</span><span style=color:#f92672;>use </span><span>std::arch::x86_64::{
+</span><span>    __m256i, _mm256_add_epi32, _mm256_and_si256, _mm256_loadu_si256, _mm256_or_si256,
+</span><span>    _mm256_set1_epi32, _mm256_set1_epi8, _mm256_slli_epi32, _mm256_srli_epi32,
+</span><span>    _mm256_storeu_si256, _mm256_xor_si256,
+</span><span>};
+</span></code></pre> <p>Not a fan. I had to make this macro</p> <pre class=language-rust data-lang=rust style=background-color:#272822;color:#f8f8f2;><code class=language-rust data-lang=rust><span style=color:#66d9ef;>macro_rules! </span><span>use_intrinsic {
+</span><span>    (</span><span style=color:#f92672;>$</span><span>($item: tt), </span><span style=color:#f92672;>+ $</span><span>(,)?) </span><span style=color:#f92672;>=> </span><span>{
+</span><span>        #[cfg(target_arch </span><span style=color:#f92672;>= </span><span style=color:#e6db74;>"x86"</span><span>)]
+</span><span>        </span><span style=color:#f92672;>use </span><span>std::arch::x86::{</span><span style=color:#f92672;>$</span><span>($item), </span><span style=color:#f92672;>+</span><span>};
+</span><span>        #[cfg(target_arch </span><span style=color:#f92672;>= </span><span style=color:#e6db74;>"x86_64"</span><span>)]
+</span><span>        </span><span style=color:#f92672;>use </span><span>std::arch::x86_64::{</span><span style=color:#f92672;>$</span><span>($item), </span><span style=color:#f92672;>+</span><span>};
+</span><span>    };
+</span><span>}
+</span></code></pre> <p>and I can write</p> <pre class=language-rust data-lang=rust style=background-color:#272822;color:#f8f8f2;><code class=language-rust data-lang=rust><span>use_intrinsic! {
+</span><span>    __m256i, _mm256_add_epi32, _mm256_and_si256, _mm256_loadu_si256, _mm256_or_si256,
+</span><span>    _mm256_set1_epi32, _mm256_set1_epi8, _mm256_slli_epi32, _mm256_srli_epi32,
+</span><span>    _mm256_storeu_si256, _mm256_xor_si256,
+</span><span>}
+</span></code></pre> <p>Though I now completely lose the ability to automatically add imports through rust-analyzer. One may suggest</p> <pre class=language-rust data-lang=rust style=background-color:#272822;color:#f8f8f2;><code class=language-rust data-lang=rust><span>#[cfg(target_arch </span><span style=color:#f92672;>= </span><span style=color:#e6db74;>"x86"</span><span>)]
+</span><span style=color:#f92672;>use </span><span>std::arch::x86::</span><span style=color:#f92672;>*</span><span>;
+</span><span>#[cfg(target_arch </span><span style=color:#f92672;>= </span><span style=color:#e6db74;>"x86_64"</span><span>)]
+</span><span style=color:#f92672;>use </span><span>std::arch::x86_64::</span><span style=color:#f92672;>*</span><span>;
+</span></code></pre> <p>But this makes my editor very laggy.</p> <p>No perfect solution either way, and I wonder whether some improvements can be made here.</p><li><p>Trying to keep DRY when using inline assembly is hard. I do think with more careful design, my little <code>asm_operand</code>, <code>asm_block</code> macros may be able to grow into a more robust library to provide better user experience when writing inline assembly. I do hope more experienced community member can chime in and explore the idea with me.</p><li><p>I do think it is a bug that a piece of code only compiles with <code>#[inline(never)]</code>, so I hope <a rel="noopener nofollow noreferrer" href=https://github.com/rust-lang/rust/issues/106781 target=_blank>this issue</a> gets addressed. Most importantly <code>#[inline(never)]</code> is only a hint, so it shouldn't affect whether the compilation succeeds or not.</p><li><p>I like the fine control of the <a rel="noopener nofollow noreferrer" href=https://doc.rust-lang.org/nightly/reference/attributes/codegen.html#the-target_feature-attribute target=_blank><code>target_feature</code> attribute</a>. This allows me to compile the code without <code>-C target-cpu=native</code>, but still get SIMD after runtime detection if my CPU supports it. But this forces the function to be <code>unsafe</code>, for good reason. But if I want to have a trait for both non-SIMD implementation and SIMD implementation, I will run into a dilemma:</p> <ul><li>I can make two traits, one for safe Rust (non-SIMD), and one for unsafe Rust (SIMD). But DRY be damned.<li>I can make a safe function, assuming runtime checks has been done, calls the unsafe SIMD function. But I technically create a safe function that is unsound, lose the protection from compiler, and rely on downstream developers to read the documentation.<li>I can still make a safe function, but adding <code>assert!()</code> to asserts the existence of the features required. But if I am so desperate that I use SIMD, that will be an expensive one in a hot loop.</ul> <p>At the end of the day, I made some compromises. I added <code>debug_assert!()</code> for feature detections in my function to hope bugs could be caught while running tests, benchmarks and so on.</p> <p>I thought of a system which uses type system to guard detection of feature. Here is a sketch</p> <pre class=language-rust data-lang=rust style=background-color:#272822;color:#f8f8f2;><code class=language-rust data-lang=rust><span style=font-style:italic;color:#66d9ef;>trait </span><span>Feature {
+</span><span>    </span><span style=font-style:italic;color:#66d9ef;>fn </span><span style=color:#a6e22e;>detect</span><span>() -> </span><span style=font-style:italic;color:#66d9ef;>bool</span><span>;
+</span><span>}
+</span><span>
+</span><span style=color:#75715e;>// Bunch of feature types
+</span><span style=font-style:italic;color:#66d9ef;>struct </span><span>SSE2;
+</span><span style=font-style:italic;color:#66d9ef;>impl </span><span>Feature </span><span style=color:#f92672;>for </span><span>SSE2 {
+</span><span>    </span><span style=font-style:italic;color:#66d9ef;>fn </span><span style=color:#a6e22e;>detect</span><span>() -> </span><span style=font-style:italic;color:#66d9ef;>bool </span><span>{
+</span><span>        is_x86_feature_detected!(</span><span style=color:#e6db74;>"sse2"</span><span>)
+</span><span>    }
+</span><span>}
+</span><span>
+</span><span style=font-style:italic;color:#66d9ef;>struct </span><span>AVX2;
+</span><span style=font-style:italic;color:#66d9ef;>impl </span><span>Feature </span><span style=color:#f92672;>for </span><span>AVX2 {
+</span><span>    </span><span style=font-style:italic;color:#66d9ef;>fn </span><span style=color:#a6e22e;>detect</span><span>() -> </span><span style=font-style:italic;color:#66d9ef;>bool </span><span>{
+</span><span>        is_x86_feature_detected!(</span><span style=color:#e6db74;>"avx2"</span><span>)
+</span><span>    }
+</span><span>}
+</span><span>
+</span><span style=font-style:italic;color:#66d9ef;>impl</span><span>&LTF0> Feature </span><span style=color:#f92672;>for</span><span> (F0)
+</span><span style=color:#f92672;>where
+</span><span>    F0: Feature,
+</span><span>{
+</span><span>    </span><span style=font-style:italic;color:#66d9ef;>fn </span><span style=color:#a6e22e;>detect</span><span>() -> </span><span style=font-style:italic;color:#66d9ef;>bool </span><span>{
+</span><span>        </span><span style=color:#ae81ff;>F0</span><span>::detect()
+</span><span>    }
+</span><span>}
+</span><span>
+</span><span style=font-style:italic;color:#66d9ef;>impl</span><span>&LTF0, F1> Feature </span><span style=color:#f92672;>for</span><span> (F0, F1)
+</span><span style=color:#f92672;>where
+</span><span>    F0: Feature,
+</span><span>    F1: Feature,
+</span><span>{
+</span><span>    </span><span style=font-style:italic;color:#66d9ef;>fn </span><span style=color:#a6e22e;>detect</span><span>() -> </span><span style=font-style:italic;color:#66d9ef;>bool </span><span>{
+</span><span>        </span><span style=color:#ae81ff;>F0</span><span>::detect() </span><span style=color:#f92672;>&& </span><span style=color:#ae81ff;>F1</span><span>::detect()
+</span><span>    }
+</span><span>}
+</span><span style=color:#75715e;>/* omitted more impl for longer tuple */
+</span><span>
+</span><span style=color:#75715e;>/* omitted some macro magic to make a larger tuple into-able to its subset */
+</span><span>
+</span><span>#[derive(Clone, Copy)]
+</span><span style=font-style:italic;color:#66d9ef;>struct </span><span>FeatureToken&LTT>(PhantomData&LTT>);
+</span><span>
+</span><span style=font-style:italic;color:#66d9ef;>impl</span><span>&LTT: Feature> FeatureToken&LTT> {
+</span><span>    </span><span style=font-style:italic;color:#66d9ef;>fn </span><span style=color:#a6e22e;>new</span><span>() -> </span><span style=font-style:italic;color:#66d9ef;>Option</span><span><</span><span style=font-style:italic;color:#66d9ef;>Self</span><span>> {
+</span><span>        </span><span style=color:#f92672;>if </span><span>T::detect() {
+</span><span>            </span><span style=font-style:italic;color:#66d9ef;>Some</span><span>(</span><span style=font-style:italic;color:#66d9ef;>Self</span><span>(PhantomData))
+</span><span>        } </span><span style=color:#f92672;>else </span><span>{
+</span><span>            </span><span style=font-style:italic;color:#66d9ef;>None
+</span><span>        }
+</span><span>    }
+</span><span>}
+</span><span>
+</span><span style=color:#75715e;>// we can have functions like this
+</span><span style=font-style:italic;color:#66d9ef;>fn </span><span style=color:#a6e22e;>this_fn_needs_sse2_and_avx2</span><span>(</span><span style=font-style:italic;color:#fd971f;>a</span><span>: </span><span style=font-style:italic;color:#66d9ef;>u32</span><span>, </span><span style=font-style:italic;color:#fd971f;>b</span><span>: </span><span style=font-style:italic;color:#66d9ef;>u32</span><span>, </span><span style=color:#f92672;>_</span><span>: FeatureToken<(SSE2, AVX2)>);
+</span></code></pre> <p>The only way <code>FeatureToken<(SSE2, AVX2)></code> can be created is by testing features, so the type system should ensure that such function is only called when we actually does the runtime feature detection, and tested feature exists.</p><li><p>I think the legacy const generics syntax in documentation is easy to miss</p> <pre class=language-rust data-lang=rust style=background-color:#272822;color:#f8f8f2;><code class=language-rust data-lang=rust><span style=color:#f92672;>pub unsafe </span><span style=font-style:italic;color:#66d9ef;>fn </span><span style=color:#a6e22e;>_mm256_slli_epi32</span><span>(</span><span style=font-style:italic;color:#fd971f;>a</span><span>: __m256i, </span><span style=color:#f92672;>const </span><span style=font-style:italic;color:#fd971f;>IMM8</span><span>: </span><span style=font-style:italic;color:#66d9ef;>i32</span><span>) -> __m256i;
+</span><span>                                            </span><span style=color:#f92672;>^^^^^
+</span></code></pre> <p>We almost never encounter this syntax anywhere else in Rust, and it is easy to skim over it. I think <code>rustdoc</code> should make this easier to spot.</p></ul><p>One more thing: the friend who sent me the link did a crude CUDA implementation in C++ (to solve a simplified version) after seeing me having fun with this. His preliminary result showed about 40B/s on a 3070. I might revisit this one day to try out <a rel="noopener nofollow noreferrer" href=https://github.com/Rust-GPU/Rust-CUDA target=_blank><code>Rust-CUDA</code></a>, but that's the story for another day!</div></article></div><div class="column is-2 is-hidden-mobile"><aside style="position: sticky; top: 48px" class=menu><p class="heading has-text-weight-bold">Contents<ul class=menu-list><li><a class="toc is-size-7 is-active" href=/posts/finding-nice-md5s-using-rust/#introduction id=link-introduction> Introduction </a><li><a class="toc is-size-7" href=/posts/finding-nice-md5s-using-rust/#computing-niceties id=link-computing-niceties> Computing "Niceties" </a> <ul><li><a class="toc is-size-7" href=/posts/finding-nice-md5s-using-rust/#baseline id=link-baseline> Baseline </a><li><a class="toc is-size-7" href=/posts/finding-nice-md5s-using-rust/#simd id=link-simd> SIMD </a><li><a class="toc is-size-7" href=/posts/finding-nice-md5s-using-rust/#a-failed-simd-approach id=link-a-failed-simd-approach> A Failed SIMD Approach </a><li><a class="toc is-size-7" href=/posts/finding-nice-md5s-using-rust/#performance-comparison id=link-performance-comparison> Performance Comparison </a></ul><li><a class="toc is-size-7" href=/posts/finding-nice-md5s-using-rust/#random-string-generation id=link-random-string-generation> Random String Generation </a> <ul><li><a class="toc is-size-7" href=/posts/finding-nice-md5s-using-rust/#baseline-1 id=link-baseline-1> Baseline </a><li><a class="toc is-size-7" href=/posts/finding-nice-md5s-using-rust/#simd-1 id=link-simd-1> SIMD </a><li><a class="toc is-size-7" href=/posts/finding-nice-md5s-using-rust/#performance-comparison-1 id=link-performance-comparison-1> Performance Comparison </a></ul><li><a class="toc is-size-7" href=/posts/finding-nice-md5s-using-rust/#md5-hash id=link-md5-hash> MD5 Hash </a> <ul><li><a class="toc is-size-7" href=/posts/finding-nice-md5s-using-rust/#baseline-2 id=link-baseline-2> Baseline </a><li><a class="toc is-size-7" href=/posts/finding-nice-md5s-using-rust/#inline-assembly id=link-inline-assembly> Inline Assembly </a><li><a class="toc is-size-7" href=/posts/finding-nice-md5s-using-rust/#simd-2 id=link-simd-2> SIMD </a><li><a class="toc is-size-7" href=/posts/finding-nice-md5s-using-rust/#performance-comparison-2 id=link-performance-comparison-2> Performance Comparison </a></ul><li><a class="toc is-size-7" href=/posts/finding-nice-md5s-using-rust/#putting-it-together id=link-putting-it-together> Putting It Together </a><li><a class="toc is-size-7" href=/posts/finding-nice-md5s-using-rust/#thoughts id=link-thoughts> Thoughts </a></ul></aside></div></div></div></section><section class=modal id=search-modal><div class=modal-background></div><div class=modal-card><header class=modal-card-head><p class=modal-card-title>Search</header><section class=modal-card-body><div class="field mb-2"><div class=control><input placeholder="Search this website." class=input id=search type=search></div></div><div class=search-results><div class=search-results__items></div></div></section></div><button class="modal-close is-large" aria-label=close></button></section><footer class="footer py-4"><div class="content has-text-centered"><p>Built with <span class=icon-text> <span class=icon> <i class="fas fa-code"></i> </span> <span>code</span> </span> and <span class=icon-text> <span class=icon> <i class="fas fa-heart"></i> </span> <span>love</span> </span><p>Powered by <span class=icon-text> <span class=icon> <i class="fas fa-power-off"></i> </span> <span>zola</span> </span></div></footer><script src=/elasticlunr.min.js></script><script src=/search_index.en.js></script><script src=/js/site.js></script><script>const menuBarHeight = document.querySelector("nav.navbar").clientHeight;
+  const tocItems = document.querySelectorAll(".toc");
+  const navSections = new Array(tocItems.length);
+
+  tocItems.forEach((el, i) => {
+    let id = el.getAttribute("id").substring(5);
+    navSections[i] = document.getElementById(id);
+  })
+
+  function isVisible(tocIndex) {
+    const current = navSections[tocIndex];
+    const next = tocIndex < tocItems.length - 1 ? navSections[tocIndex + 1]
+      : document.querySelectorAll("section.section").item(1);
+
+    const c = current.getBoundingClientRect();
+    const n = next.getBoundingClientRect();
+    const h = (window.innerHeight || document.documentElement.clientHeight);
+
+    return (c.top <= h) && (n.top - menuBarHeight >= 0);
+  }
+
+  function activateIfVisible() {
+    for (b = true, i = 0; i < tocItems.length; i++) {
+      if (b && isVisible(i)) {
+        tocItems[i].classList.add('is-active');
+        b = false;
+      } else
+        tocItems[i].classList.remove('is-active');
+    }
+  }
+
+  var isTicking = null;
+  window.addEventListener('scroll', () => {
+    if (!isTicking) {
+      window.requestAnimationFrame(() => {
+        activateIfVisible();
+        isTicking = false;
+      });
+      isTicking = true;
+    }
+  }, false);</script>

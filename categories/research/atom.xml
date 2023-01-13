@@ -1,0 +1,164 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xml:lang="en">
+	<title>Youmu - Research</title>
+	<link href="/categories/research/atom.xml" rel="self" type="application/atom+xml"/>
+  <link href="/"/>
+	<generator uri="https://www.getzola.org/">Zola</generator>
+	<updated>2021-10-27T00:00:00+00:00</updated>
+	<id>/categories/research/atom.xml</id>
+	<entry xml:lang="en">
+		<title>TikZ Externalization for Beamer</title>
+		<published>2021-10-27T00:00:00+00:00</published>
+		<updated>2021-10-27T00:00:00+00:00</updated>
+		<link rel="alternate" href="/posts/tikz-externalization-reuse-for-beamer/" type="text/html"/>
+		<id>/posts/tikz-externalization-reuse-for-beamer/</id>
+		<content type="html">&lt;p&gt;Recently I made a presentation for a talk on &lt;a rel=&quot;noopener nofollow noreferrer&quot; target=&quot;_blank&quot; href=&quot;https:&#x2F;&#x2F;comptag.github.io&#x2F;fwcg21&#x2F;&quot;&gt;FWCG2021&lt;&#x2F;a&gt;. As always I went to Beamer. What was different this time was that I needed many figures, I mean, a lot. On top of that, I wanted to do overlays on these figures. Overleaf timed out when trying to compile all the TikZ figures so I turned to &lt;a rel=&quot;noopener nofollow noreferrer&quot; target=&quot;_blank&quot; href=&quot;https:&#x2F;&#x2F;www.overleaf.com&#x2F;learn&#x2F;latex&#x2F;Questions&#x2F;I_have_a_lot_of_tikz%2C_matlab2tikz_or_pgfplots_figures%2C_so_I%27m_getting_a_compilation_timeout._Can_I_externalise_my_figures%3F&quot;&gt;&lt;code&gt;external&lt;&#x2F;code&gt;&lt;&#x2F;a&gt;. There are a lot of files to generate when I built the presentation locally and it was unbearably slow. Maybe there&#x27;s a way to reduce the time, at least a little bit?&lt;&#x2F;p&gt;
+&lt;span id=&quot;continue-reading&quot;&gt;&lt;&#x2F;span&gt;&lt;h1 id=&quot;vanilla-tikz-externalization&quot;&gt;Vanilla TikZ Externalization&lt;&#x2F;h1&gt;
+&lt;p&gt;Using the vanilla TikZ externalization is easy, simply put&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;ltx&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-ltx &quot;&gt;&lt;code class=&quot;language-ltx&quot; data-lang=&quot;ltx&quot;&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\usetikzlibrary&lt;&#x2F;span&gt;&lt;span&gt;{external}
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\tikzexternalize &lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;% or optionally \tikzexternalize[prefix=some_directory&#x2F;]
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;in the &lt;code&gt;main.tex&lt;&#x2F;code&gt;. Now the LaTeX compiler will spawn another process to compile a TikZ environment into some separated files whenever it encounters one.&lt;&#x2F;p&gt;
+&lt;p&gt;Properties of the vanilla approach:&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;By default, the name of the files generating by an environment will be &lt;code&gt;figure-{num}&lt;&#x2F;code&gt;, where &lt;code&gt;{num}&lt;&#x2F;code&gt; is automatically incremented.
+Using &lt;code&gt;\tikzsetnextfilename&lt;&#x2F;code&gt; could set the file name, but the &amp;quot;same&amp;quot; environment in later overlays will not be generated since they have the same name and TikZ doesn&#x27;t think they are different.&lt;&#x2F;li&gt;
+&lt;li&gt;Each TikZ environment generates 4 files:
+&lt;ol&gt;
+&lt;li&gt;&lt;code&gt;{name}.log&lt;&#x2F;code&gt;: the log of the individual process compiling this environment.&lt;&#x2F;li&gt;
+&lt;li&gt;&lt;code&gt;{name}.md5&lt;&#x2F;code&gt;: the MD5 hash of the input to the TikZ environment, pre-expaned.&lt;&#x2F;li&gt;
+&lt;li&gt;&lt;code&gt;{name}.dpth&lt;&#x2F;code&gt;: the auxiliary file to include when loading externalized figure.&lt;&#x2F;li&gt;
+&lt;li&gt;&lt;code&gt;{name}.pdf&lt;&#x2F;code&gt;: the generated figure.&lt;&#x2F;li&gt;
+&lt;&#x2F;ol&gt;
+&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;p&gt;So if we set up a TikZ figure as follows,&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;ltx&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-ltx &quot;&gt;&lt;code class=&quot;language-ltx&quot; data-lang=&quot;ltx&quot;&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;\begin&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;frame&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span&gt;  &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;\begin&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;tikzpicture&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\node&lt;&#x2F;span&gt;&lt;span&gt;[draw, circle] (n) at (0, 0) {&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\alt&lt;&#x2F;span&gt;&lt;span&gt;&amp;lt;2&amp;gt;{1}{2}};
+&lt;&#x2F;span&gt;&lt;span&gt;  &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;\end&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;tikzpicture&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;\end&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;frame&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;where we want the node label to be &lt;code&gt;1&lt;&#x2F;code&gt; on the first overlay, and &lt;code&gt;2&lt;&#x2F;code&gt; on the second overlay. In this snippet, beamer won&#x27;t recognize the existence of the second overlay, and only one overlay will be generated.&lt;&#x2F;p&gt;
+&lt;h1 id=&quot;prior-arts&quot;&gt;Prior Arts&lt;&#x2F;h1&gt;
+&lt;p&gt;The most immediate problem to solve is to make externalization to generate different figures across overlays. Such question was asked and answered before.&lt;&#x2F;p&gt;
+&lt;h2 id=&quot;without-custom-filename&quot;&gt;Without Custom Filename&lt;&#x2F;h2&gt;
+&lt;p&gt;The earliest reference I could find is due to &lt;a rel=&quot;noopener nofollow noreferrer&quot; target=&quot;_blank&quot; href=&quot;https:&#x2F;&#x2F;tex.stackexchange.com&#x2F;questions&#x2F;78955&#x2F;use-tikz-external-feature-with-beamer-only&quot;&gt;this TeX stackexchange question&lt;&#x2F;a&gt;, in which 2 methods were given. The main idea is to let beamer know how many overlay is needed, and externalization should automatically generate figures for each overlay, with incrementing name.&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;
+&lt;p&gt;&lt;a rel=&quot;noopener nofollow noreferrer&quot; target=&quot;_blank&quot; href=&quot;https:&#x2F;&#x2F;tex.stackexchange.com&#x2F;a&#x2F;79461&#x2F;73509&quot;&gt;Christian Feuersänger&#x27;s Solution&lt;&#x2F;a&gt;&lt;&#x2F;p&gt;
+&lt;p&gt;The idea is simple, wrap the TikZ environment by a &lt;code&gt;\only&lt;&#x2F;code&gt; call indicating the number of overlays needed in the frame. So the prior example becomes:&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;ltx&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-ltx &quot;&gt;&lt;code class=&quot;language-ltx&quot; data-lang=&quot;ltx&quot;&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;\begin&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;frame&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span&gt;  &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\only&lt;&#x2F;span&gt;&lt;span&gt;&amp;lt;1-2&amp;gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;\begin&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;tikzpicture&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span&gt;      &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\node&lt;&#x2F;span&gt;&lt;span&gt;[draw, circle] (n) at (0, 0) {&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\alt&lt;&#x2F;span&gt;&lt;span&gt;&amp;lt;2&amp;gt;{1}{2}};
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;\end&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;tikzpicture&lt;&#x2F;span&gt;&lt;span&gt;}&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span&gt;  }&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;\end&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;frame&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;One downside is the need to explicitly spell out the required overlays.&lt;&#x2F;p&gt;
+&lt;&#x2F;li&gt;
+&lt;li&gt;
+&lt;p&gt;&lt;a rel=&quot;noopener nofollow noreferrer&quot; target=&quot;_blank&quot; href=&quot;https:&#x2F;&#x2F;tex.stackexchange.com&#x2F;a&#x2F;79572&#x2F;73509&quot;&gt;Andrew Stacey&#x27;s Solution&lt;&#x2F;a&gt;&lt;&#x2F;p&gt;
+&lt;p&gt;The idea is to communicate the need for more overlays in the &lt;code&gt;.dpth&lt;&#x2F;code&gt; file to the main process, and turn off some optimizations to make sure such communication happens. Andrew made a TikZ preset for this:&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;ltx&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-ltx &quot;&gt;&lt;code class=&quot;language-ltx&quot; data-lang=&quot;ltx&quot;&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\makeatletter
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\tikzset&lt;&#x2F;span&gt;&lt;span&gt;{
+&lt;&#x2F;span&gt;&lt;span&gt;  beamer externalising&#x2F;.style={&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span&gt;    execute at end picture={&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span&gt;      &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\tikzifexternalizing&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\ifbeamer@anotherslide
+&lt;&#x2F;span&gt;&lt;span&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\pgfexternalstorecommand&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\string\global\string\beamer@anotherslidetrue&lt;&#x2F;span&gt;&lt;span&gt;}&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;\fi
+&lt;&#x2F;span&gt;&lt;span&gt;      }{}&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span&gt;    }&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span&gt;  },
+&lt;&#x2F;span&gt;&lt;span&gt;  external&#x2F;optimize=false
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\makeatother
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;And all it takes to use it is just to apply the style for the environment:&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;ltx&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-ltx &quot;&gt;&lt;code class=&quot;language-ltx&quot; data-lang=&quot;ltx&quot;&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;\begin&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;frame&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span&gt;  &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;\begin&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;tikzpicture&lt;&#x2F;span&gt;&lt;span&gt;}[beamer externalising]
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\node&lt;&#x2F;span&gt;&lt;span&gt;[draw, circle] (n) at (0, 0) {&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\alt&lt;&#x2F;span&gt;&lt;span&gt;&amp;lt;2&amp;gt;{1}{2}};
+&lt;&#x2F;span&gt;&lt;span&gt;  &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;\end&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;tikzpicture&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;\end&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;frame&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;p&gt;The main drawbacks of these two solutions are:&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;
+&lt;p&gt;Setting a custom filename for the figure does not work. Consider the following snippet:&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;ltx&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-ltx &quot;&gt;&lt;code class=&quot;language-ltx&quot; data-lang=&quot;ltx&quot;&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;\begin&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;frame&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span&gt;  &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\tikzsetnextfilename&lt;&#x2F;span&gt;&lt;span&gt;{test}
+&lt;&#x2F;span&gt;&lt;span&gt;  &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\only&lt;&#x2F;span&gt;&lt;span&gt;&amp;lt;1-2&amp;gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;\begin&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;tikzpicture&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span&gt;      &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\node&lt;&#x2F;span&gt;&lt;span&gt;[draw, circle] (n) at (0, 0) {&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\alt&lt;&#x2F;span&gt;&lt;span&gt;&amp;lt;2&amp;gt;{1}{2}};
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;\end&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;tikzpicture&lt;&#x2F;span&gt;&lt;span&gt;}&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span&gt;  }&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;\end&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#fd971f;&quot;&gt;frame&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;ol&gt;
+&lt;li&gt;On overlay 1, &lt;code&gt;test.log&lt;&#x2F;code&gt;, &lt;code&gt;test.md5&lt;&#x2F;code&gt;, &lt;code&gt;test.dpth&lt;&#x2F;code&gt;, and &lt;code&gt;test.pdf&lt;&#x2F;code&gt; are produced, which correctly reflect the first overlay.&lt;&#x2F;li&gt;
+&lt;li&gt;On overlay 2, the &lt;strong&gt;unexpanded&lt;&#x2F;strong&gt; but canonicalized body of &lt;code&gt;tikzpicture&lt;&#x2F;code&gt; is passed for MD5 digest, which is obviously identical to the previous overlay. The externalization process finds &lt;code&gt;test.md5&lt;&#x2F;code&gt; and deems that it is fine to just use that.&lt;&#x2F;li&gt;
+&lt;&#x2F;ol&gt;
+&lt;p&gt;The result is an unchanged figure despite a &lt;code&gt;\alt&lt;&#x2F;code&gt; command in it.&lt;&#x2F;p&gt;
+&lt;&#x2F;li&gt;
+&lt;li&gt;
+&lt;p&gt;Suppose in a 3-overlay frame the figure only changes in overlay 2, the externalization will still generate 3 figures instead of 2.&lt;&#x2F;p&gt;
+&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;h2 id=&quot;with-custom-filename&quot;&gt;With Custom Filename&lt;&#x2F;h2&gt;
+&lt;p&gt;Andrew Stacey addressed the first drawback in &lt;a rel=&quot;noopener nofollow noreferrer&quot; target=&quot;_blank&quot; href=&quot;https:&#x2F;&#x2F;tex.stackexchange.com&#x2F;a&#x2F;119440&#x2F;73509&quot;&gt;this question&lt;&#x2F;a&gt;. The idea is simply to attach the overlay number to the name when using &lt;code&gt;\tikzsetnextfilename&lt;&#x2F;code&gt;, so that figures in different overlays get different filenames. It is achieved by simply redefining &lt;code&gt;\tikzsetnextfilename&lt;&#x2F;code&gt; as:&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;ltx&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-ltx &quot;&gt;&lt;code class=&quot;language-ltx&quot; data-lang=&quot;ltx&quot;&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\let\orig@tikzsetnextfilename&lt;&#x2F;span&gt;&lt;span&gt;=&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\tikzsetnextfilename
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\renewcommand\tikzsetnextfilename&lt;&#x2F;span&gt;&lt;span&gt;[1]{&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\orig@tikzsetnextfilename&lt;&#x2F;span&gt;&lt;span&gt;{#1-&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\overlaynumber&lt;&#x2F;span&gt;&lt;span&gt;}}
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;The second drawback is still present, and I came up with a partial solution for that.&lt;&#x2F;p&gt;
+&lt;h1 id=&quot;introducing-tikznamebeamer&quot;&gt;Introducing &lt;code&gt;\tikznamebeamer&lt;&#x2F;code&gt;&lt;&#x2F;h1&gt;
+&lt;p&gt;The idea is to have user to specify different groups of overlay numbers, and generate one figure per group. Here is the implementation:&lt;&#x2F;p&gt;
+&lt;pre data-lang=&quot;ltx&quot; style=&quot;background-color:#272822;color:#f8f8f2;&quot; class=&quot;language-ltx &quot;&gt;&lt;code class=&quot;language-ltx&quot; data-lang=&quot;ltx&quot;&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;\usepackage&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;font-style:italic;color:#66d9ef;&quot;&gt;etoolbox&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\makeatletter
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\newcounter&lt;&#x2F;span&gt;&lt;span&gt;{tikznamebeamer@tempcnt}&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;% counter variable to go through groups
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;\def&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\tikznamebeamer@finalidx&lt;&#x2F;span&gt;&lt;span&gt;{}&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;% will store the group index to use
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#f92672;&quot;&gt;\newcommand&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\tikznamebeamer&lt;&#x2F;span&gt;&lt;span&gt;}[2][figure]{&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\def\tikznamebeamer@slidesetidx&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\setcounter&lt;&#x2F;span&gt;&lt;span&gt;{tikznamebeamer@tempcnt}{0}&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;% reset counter
+&lt;&#x2F;span&gt;&lt;span&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\let\tikznamebeamer@finalidx&lt;&#x2F;span&gt;&lt;span&gt;=0&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;% default group being 0
+&lt;&#x2F;span&gt;&lt;span&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\renewcommand&lt;&#x2F;span&gt;&lt;span&gt;*{&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\do&lt;&#x2F;span&gt;&lt;span&gt;}[1]{&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;% loop
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\stepcounter&lt;&#x2F;span&gt;&lt;span&gt;{tikznamebeamer@tempcnt}&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;% counter++
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\let\tikznamebeamer@templist&lt;&#x2F;span&gt;&lt;span&gt;=&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\relax&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\forcsvlist&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\listadd\tikznamebeamer@templist&lt;&#x2F;span&gt;&lt;span&gt;}{####1}&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;% iterate through list of overlay numbers
+&lt;&#x2F;span&gt;&lt;span&gt;            &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\xifinlist&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\number\beamer@slideinframe&lt;&#x2F;span&gt;&lt;span&gt;}{&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\tikznamebeamer@templist&lt;&#x2F;span&gt;&lt;span&gt;}{&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span&gt;                &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\edef\tikznamebeamer@finalidx&lt;&#x2F;span&gt;&lt;span&gt;{&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\thetikznamebeamer@tempcnt&lt;&#x2F;span&gt;&lt;span&gt;}&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;% found, set group number
+&lt;&#x2F;span&gt;&lt;span&gt;            }{}&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span&gt;        }&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span&gt;        &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\docsvlist&lt;&#x2F;span&gt;&lt;span&gt;{#2}&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;% iterate through a list of lists of overlay numbers
+&lt;&#x2F;span&gt;&lt;span&gt;    }&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\tikznamebeamer@slidesetidx&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span&gt;    &lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\tikzsetnextfilename&lt;&#x2F;span&gt;&lt;span&gt;{#1-&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\tikznamebeamer@finalidx&lt;&#x2F;span&gt;&lt;span&gt;}&lt;&#x2F;span&gt;&lt;span style=&quot;color:#75715e;&quot;&gt;%
+&lt;&#x2F;span&gt;&lt;span&gt;}
+&lt;&#x2F;span&gt;&lt;span style=&quot;color:#66d9ef;&quot;&gt;\makeatother
+&lt;&#x2F;span&gt;&lt;&#x2F;code&gt;&lt;&#x2F;pre&gt;
+&lt;p&gt;&lt;code&gt;\tikznamebeamer&lt;&#x2F;code&gt; accepts two arguments. The first argument is the desired filename. The second argument is a list of lists of numbers. For example, suppose the current frame has 5 overlays, &lt;code&gt;{{2, 5}, 4}&lt;&#x2F;code&gt; defines &lt;strong&gt;3&lt;&#x2F;strong&gt; groups (note that any overlay number of specified goes to group 0):&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;group 0 (default): 1, 3&lt;&#x2F;li&gt;
+&lt;li&gt;gruop 1: 2, 5&lt;&#x2F;li&gt;
+&lt;li&gt;group 2: 4&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;p&gt;Hence a call &lt;code&gt;\tikznamebeamer[my-graph]{{2, 5}, 4}&lt;&#x2F;code&gt; in this case will create 3 sets of files with name &lt;code&gt;my-graph-0&lt;&#x2F;code&gt;, &lt;code&gt;my-graph-1&lt;&#x2F;code&gt;, and &lt;code&gt;my-graph-2&lt;&#x2F;code&gt;. Overlay will use the correct set of files according to its group number.&lt;&#x2F;p&gt;
+&lt;p&gt;In this way, we can both specify a custom filename, and avoid unnecessary compilation at the same time.&lt;&#x2F;p&gt;
+&lt;h1 id=&quot;future-directions&quot;&gt;Future Directions&lt;&#x2F;h1&gt;
+&lt;p&gt;It is quite tedious to manually specify what overlay numbers have the same figure. Ideally the externalization should:&lt;&#x2F;p&gt;
+&lt;ol&gt;
+&lt;li&gt;Hash the canonicalized body of &lt;code&gt;tikzpicture&lt;&#x2F;code&gt; &lt;strong&gt;after expanding beamer related macros&lt;&#x2F;strong&gt;.&lt;&#x2F;li&gt;
+&lt;li&gt;Match the hash within the generated files to decide whether to create a new one or not.&lt;&#x2F;li&gt;
+&lt;&#x2F;ol&gt;
+&lt;p&gt;I haven&#x27;t figured out the expanding part yet. But here are some thoughts on the second part:&lt;&#x2F;p&gt;
+&lt;ul&gt;
+&lt;li&gt;One simple idea is to append the hash to the end of the filename. Downside is that the figure could be frequently edited, and old files quickly bloat the build directory.&lt;&#x2F;li&gt;
+&lt;li&gt;Another more practical idea is to store a mapping between hash and filename in memory. This seems  much more complicated to implement though.&lt;&#x2F;li&gt;
+&lt;&#x2F;ul&gt;
+&lt;p&gt;Of course the elephant in the room is that the compilation is single-threaded, where the TikZ compilation chould&#x27;ve been done in parallel. There are some techniques involving using a custom build system for figures but that does not play too well on Overleaf.&lt;&#x2F;p&gt;
+</content>
+	</entry>
+</feed>
