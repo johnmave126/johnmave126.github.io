@@ -773,7 +773,8 @@ Overall, this is quite a nice little pet project to get me familiar with SIMD an
   }
   /* omitted more impl for longer tuple */
   
-  /* some macro magic to make a larger tuple into-able to its subset */
+  /* omitted some macro magic to make a larger tuple into-able to its subset */
+
   #[derive(Clone, Copy)]
   struct FeatureToken<T>(PhantomData<T>);
   
