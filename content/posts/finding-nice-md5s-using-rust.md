@@ -729,6 +729,7 @@ Overall, this is quite a nice little pet project to get me familiar with SIMD an
    - I can make two traits, one for safe Rust (non-SIMD), and one for unsafe Rust (SIMD). But DRY be damned.
    - I can make a safe function, assuming runtime checks has been done, calls the unsafe SIMD function. But I technically create a safe function that is unsound, lose the protection from compiler, and rely on downstream developers to read the documentation.
    - I can still make a safe function, but adding `assert!()` to asserts the existence of the features required. But if I am so desperate that I use SIMD, that will be an expensive one in a hot loop.
+
   At the end of the day, I made some compromises. I added `debug_assert!()` for feature detections in my function to hope bugs could be caught while running tests, benchmarks and so on.
 
   I thought of a system which uses type system to guard detection of feature. Here is a sketch
